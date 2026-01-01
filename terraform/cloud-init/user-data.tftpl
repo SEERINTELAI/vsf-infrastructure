@@ -6,17 +6,18 @@ users:
   - name: ubuntu
     sudo: ALL=(ALL) NOPASSWD:ALL
     groups: users, admin, docker
+    lock_passwd: false
     ssh_authorized_keys:
       - ${ssh_key}
+
+ssh_pwauth: true
 
 package_update: true
 packages:
   - qemu-guest-agent
-  - docker.io
   - htop
+  - vim
 
 runcmd:
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
-  - systemctl enable docker
-  - systemctl start docker
