@@ -1,0 +1,9 @@
+# Test dependencies for VSF Infrastructure
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-xdist>=3.3.0  # For parallel test execution
+pytest-timeout>=2.2.0  # Prevent hanging tests
+
+# Type checking
+mypy>=1.5.0
+types-PyYAML>=6.0.0
