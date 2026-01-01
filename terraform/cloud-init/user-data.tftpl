@@ -1,0 +1,22 @@
+#cloud-config
+hostname: ${hostname}
+fqdn: ${hostname}.vsf.local
+
+users:
+  - name: ubuntu
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: users, admin, docker
+    ssh_authorized_keys:
+      - ${ssh_key}
+
+package_update: true
+packages:
+  - qemu-guest-agent
+  - docker.io
+  - htop
+
+runcmd:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  - systemctl enable docker
+  - systemctl start docker
