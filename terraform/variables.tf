@@ -4,82 +4,103 @@ variable "libvirt_uri" {
   default     = "qemu:///system"
 }
 
-variable "storage_pool" {
-  type    = string
-  default = "default"
-}
-
-variable "network_bridge" {
-  type    = string
-  default = "ovs-br0"
-}
-
 variable "base_image_url" {
-  type    = string
-  default = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+  description = "URL for the base Ubuntu cloud image"
+  type        = string
+  default     = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
 }
 
+# Control Plane Configuration
 variable "control_plane_count" {
-  type    = number
-  default = 3
+  description = "Number of control plane VMs"
+  type        = number
+  default     = 3
 }
 
 variable "control_plane_vcpu" {
-  type    = number
-  default = 8
+  description = "vCPUs per control plane VM"
+  type        = number
+  default     = 8
 }
 
 variable "control_plane_memory_mb" {
-  type    = number
-  default = 32768
+  description = "Memory in MB per control plane VM"
+  type        = number
+  default     = 32768
 }
 
 variable "control_plane_disk_gb" {
-  type    = number
-  default = 100
+  description = "Disk size in GB per control plane VM"
+  type        = number
+  default     = 100
 }
 
+# Worker Configuration
 variable "worker_count" {
-  type    = number
-  default = 10
+  description = "Number of standard worker VMs"
+  type        = number
+  default     = 10
 }
 
 variable "worker_vcpu" {
-  type    = number
-  default = 4
+  description = "vCPUs per worker VM"
+  type        = number
+  default     = 4
 }
 
 variable "worker_memory_mb" {
-  type    = number
-  default = 16384
+  description = "Memory in MB per worker VM"
+  type        = number
+  default     = 16384
 }
 
 variable "worker_disk_gb" {
-  type    = number
-  default = 50
+  description = "Disk size in GB per worker VM"
+  type        = number
+  default     = 50
 }
 
+# GPU Worker Configuration
 variable "gpu_worker_count" {
-  type    = number
-  default = 8
+  description = "Number of GPU worker VMs"
+  type        = number
+  default     = 8
 }
 
 variable "gpu_worker_vcpu" {
-  type    = number
-  default = 8
+  description = "vCPUs per GPU worker VM"
+  type        = number
+  default     = 8
 }
 
 variable "gpu_worker_memory_mb" {
-  type    = number
-  default = 32768
+  description = "Memory in MB per GPU worker VM"
+  type        = number
+  default     = 32768
 }
 
 variable "gpu_worker_disk_gb" {
-  type    = number
-  default = 100
+  description = "Disk size in GB per GPU worker VM"
+  type        = number
+  default     = 100
 }
 
+# Network Configuration
+variable "cluster_network_cidr" {
+  description = "CIDR for the cluster network"
+  type        = string
+  default     = "10.100.0.0/24"
+}
+
+variable "storage_network_cidr" {
+  description = "CIDR for the storage network"
+  type        = string
+  default     = "10.200.0.0/24"
+}
+
+# Infrastructure VMs
 variable "infra_vms" {
+  description = "Infrastructure VM configurations"
   type = map(object({
     vcpu      = number
     memory_mb = number
@@ -92,27 +113,21 @@ variable "infra_vms" {
   }
 }
 
-variable "cluster_network_cidr" {
-  type    = string
-  default = "10.100.0.0/24"
-}
-
-variable "storage_network_cidr" {
-  type    = string
-  default = "10.200.0.0/24"
-}
-
+# Feature Flags
 variable "use_hugepages" {
-  type    = bool
-  default = true
+  description = "Enable HugePages for VMs"
+  type        = bool
+  default     = true
 }
 
 variable "environment" {
-  type    = string
-  default = "dev"
+  description = "Environment name (dev/staging/prod)"
+  type        = string
+  default     = "dev"
 }
 
 variable "project" {
-  type    = string
-  default = "vsf"
+  description = "Project name"
+  type        = string
+  default     = "vsf"
 }

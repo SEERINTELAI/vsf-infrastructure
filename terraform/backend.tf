@@ -14,11 +14,8 @@ terraform {
     }
   }
 
-  # Azure Blob Storage backend
-  backend "azurerm" {
-    resource_group_name  = "vsf-terraform-state"
-    storage_account_name = "vsfterraformstate"
-    container_name       = "tfstate"
-    key                  = "vsf-infrastructure.tfstate"
+  # Local backend for development
+  backend "local" {
+    path = "terraform.tfstate"
   }
 }
