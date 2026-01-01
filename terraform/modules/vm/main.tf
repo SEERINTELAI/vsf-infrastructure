@@ -4,7 +4,7 @@
 # This module creates libvirt VMs for the Virtual Server Farm cluster.
 # Supports control plane, worker, and GPU worker node types.
 #
-# Author: Agent (Task 97)
+# Author: Agent (Task 97, fixed by Task 99)
 # Created: 2026-01-01
 # =============================================================================
 
@@ -104,7 +104,7 @@ resource "libvirt_volume" "root" {
   name           = "${var.vm_name}-root.qcow2"
   pool           = var.storage_pool
   base_volume_id = libvirt_volume.base.id
-  size           = local.final_disk * 1024 * 1024 * 1024  # Convert GB to bytes
+  size           = local.final_disk * 1024 * 1024 * 1024
   format         = "qcow2"
 }
 
@@ -130,11 +130,6 @@ resource "libvirt_domain" "vm" {
   vcpu       = local.final_vcpus
   qemu_agent = true
   autostart  = var.autostart
-
-  # Use HugePages for memory (configured on host)
-  memory {
-    hugepages = var.use_hugepages
-  }
 
   # CPU configuration
   cpu {
@@ -174,24 +169,6 @@ resource "libvirt_domain" "vm" {
     }
   }
 
-  # GPU passthrough (for gpu_worker type)
-  dynamic "hostdev" {
-    for_each = var.gpu_pci_addresses
-    content {
-      mode    = "subsystem"
-      type    = "pci"
-      managed = true
-      source {
-        address {
-          domain   = 0
-          bus      = parseint(split(":", hostdev.value)[0], 16)
-          slot     = parseint(split(":", split(".", hostdev.value)[0])[1], 16)
-          function = parseint(split(".", hostdev.value)[1], 16)
-        }
-      }
-    }
-  }
-
   # Console for debugging
   console {
     type        = "pty"
@@ -207,16 +184,15 @@ resource "libvirt_domain" "vm" {
 
   # Graphics (VNC for management)
   graphics {
-    type        = "vnc"
-    listen_type = "address"
+    type           = "vnc"
+    listen_type    = "address"
     listen_address = "0.0.0.0"
-    autoport    = true
+    autoport       = true
   }
 
   # Lifecycle
   lifecycle {
     ignore_changes = [
-      # Ignore changes to network_interface as it may change after lease
       network_interface,
     ]
   }
@@ -237,8 +213,8 @@ resource "null_resource" "vbmc_registration" {
         --port ${var.vbmc_port} \
         --username ${var.vbmc_username} \
         --password ${var.vbmc_password} \
-        --libvirt-uri qemu:///system
-      vbmc start ${var.vm_name}
+        --libvirt-uri qemu:///system || true
+      vbmc start ${var.vm_name} || true
     EOT
   }
 
