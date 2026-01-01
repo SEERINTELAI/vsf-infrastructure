@@ -1,0 +1,77 @@
+#cloud-config
+# =============================================================================
+# Virtual Server Farm - Cloud-Init Configuration
+# =============================================================================
+
+hostname: ${hostname}
+fqdn: ${hostname}.vsf.local
+manage_etc_hosts: true
+
+# User configuration
+users:
+  - name: ubuntu
+    groups: sudo, docker
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${ssh_key}
+
+# Timezone
+timezone: ${timezone}
+
+# NTP configuration
+ntp:
+  enabled: true
+  servers:
+%{ for server in split(",", ntp_servers) ~}
+    - ${server}
+%{ endfor ~}
+
+# Package updates
+package_update: true
+package_upgrade: true
+
+# Install essential packages
+packages:
+  - qemu-guest-agent
+  - curl
+  - wget
+  - vim
+  - htop
+  - iotop
+  - net-tools
+  - dnsutils
+  - jq
+  - python3
+  - python3-pip
+  - ca-certificates
+  - gnupg
+  - lsb-release
+
+# Enable qemu-guest-agent
+runcmd:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  # Signal that cloud-init is complete
+  - touch /var/lib/cloud/instance/boot-finished
+
+# Write files
+write_files:
+  - path: /etc/vsf/node-info.yaml
+    permissions: '0644'
+    content: |
+      hostname: ${hostname}
+      cluster: vsf
+      created_by: terraform
+      
+  - path: /etc/motd
+    permissions: '0644'
+    content: |
+      =====================================================
+       Virtual Server Farm - ${hostname}
+      =====================================================
+       Managed by Terraform | Part of VSF Cluster
+      =====================================================
+
+# Final message
+final_message: "VSF node ${hostname} initialized in $UPTIME seconds"

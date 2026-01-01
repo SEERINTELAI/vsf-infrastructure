@@ -1,0 +1,20 @@
+# =============================================================================
+# Virtual Server Farm - Network Configuration
+# =============================================================================
+# Cloud-init network config v2 format
+
+network:
+  version: 2
+  ethernets:
+    ens3:
+      addresses:
+        - ${ip_address}
+      gateway4: ${gateway}
+      nameservers:
+        addresses:
+%{ for dns in split(",", dns_servers) ~}
+          - ${dns}
+%{ endfor ~}
+      routes:
+        - to: 0.0.0.0/0
+          via: ${gateway}
