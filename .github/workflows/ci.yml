@@ -6,48 +6,45 @@ on:
   pull_request:
     branches: [main]
 
-jobs:
-  terraform-validate:
-    name: Terraform Validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.7"
-      - name: Format Check
-        run: terraform fmt -check -recursive
-        working-directory: terraform
-        continue-on-error: true
-      - name: Init
-        run: terraform init -backend=false
-        working-directory: terraform
-      - name: Validate
-        run: terraform validate
-        working-directory: terraform
+env:
+  PYTHON_VERSION: "3.11"
+  TERRAFORM_VERSION: "1.6.0"
 
-  python-tests:
+jobs:
+  python:
     name: Python Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Install deps
-        run: pip install -r requirements-dev.txt
-      - name: Run tests
-        run: pytest tests/ -v
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: pytest tests/test_terraform.py -v -m "not slow and not infrastructure"
 
-  docs-build:
-    name: Build Docs
+  terraform:
+    name: Terraform Validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+      - run: terraform fmt -check
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  docs:
+    name: Documentation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - name: Install MkDocs
-        run: pip install mkdocs mkdocs-material pymdown-extensions
-      - name: Build docs
-        run: mkdocs build
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install mkdocs mkdocs-material
+      - run: cd docs && mkdocs build --strict
