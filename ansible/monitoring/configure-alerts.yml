@@ -1,0 +1,294 @@
+---
+# configure-alerts.yml
+# Configure Prometheus alert rules for VSF (Task 118)
+#
+# Usage:
+#   ansible-playbook -i inventory/vsf.yml monitoring/configure-alerts.yml
+#
+# This creates PrometheusRules for:
+#   - GPU alerts (utilization, temperature, memory, power)
+#   - Power alerts (node power, energy consumption)
+#   - Cluster alerts (node health, pod failures)
+
+- name: Configure Prometheus Alert Rules
+  hosts: control_plane[0]
+  become: true
+  vars:
+    namespace: monitoring
+    
+  tasks:
+    - name: Verify Prometheus Operator is running
+      command: k3s kubectl get deployment prometheus-operator -n {{ namespace }} -o jsonpath='{.status.readyReplicas}'
+      register: operator_check
+      changed_when: false
+      failed_when: operator_check.stdout == "" or operator_check.stdout == "0"
+    
+    - name: Create GPU Alert Rules
+      copy:
+        dest: /tmp/gpu-alert-rules.yaml
+        mode: '0644'
+        content: |
+          apiVersion: monitoring.coreos.com/v1
+          kind: PrometheusRule
+          metadata:
+            name: vsf-gpu-alerts
+            namespace: {{ namespace }}
+            labels:
+              release: prometheus
+              vsf/component: alerting
+          spec:
+            groups:
+              - name: gpu.rules
+                rules:
+                  # GPU Utilization Alerts
+                  - alert: GPUHighUtilization
+                    expr: DCGM_FI_DEV_GPU_UTIL > 90
+                    for: 10m
+                    labels:
+                      severity: warning
+                      category: gpu
+                    annotations:
+                      summary: "High GPU utilization on {{ '{{' }} $labels.Hostname {{ '}}' }}"
+                      description: "GPU {{ '{{' }} $labels.gpu {{ '}}' }} on {{ '{{' }} $labels.Hostname {{ '}}' }} has been above 90% utilization for 10 minutes. Current: {{ '{{' }} $value | printf \"%.1f\" {{ '}}' }}%"
+                  
+                  - alert: GPUUtilizationSaturation
+                    expr: DCGM_FI_DEV_GPU_UTIL > 98
+                    for: 5m
+                    labels:
+                      severity: critical
+                      category: gpu
+                    annotations:
+                      summary: "GPU saturated on {{ '{{' }} $labels.Hostname {{ '}}' }}"
+                      description: "GPU {{ '{{' }} $labels.gpu {{ '}}' }} on {{ '{{' }} $labels.Hostname {{ '}}' }} is saturated (>98%) for 5 minutes. Consider scaling workloads."
+                  
+                  # GPU Temperature Alerts
+                  - alert: GPUHighTemperature
+                    expr: DCGM_FI_DEV_GPU_TEMP > 75
+                    for: 5m
+                    labels:
+                      severity: warning
+                      category: gpu
+                    annotations:
+                      summary: "High GPU temperature on {{ '{{' }} $labels.Hostname {{ '}}' }}"
+                      description: "GPU {{ '{{' }} $labels.gpu {{ '}}' }} temperature is {{ '{{' }} $value | printf \"%.0f\" {{ '}}' }}°C (threshold: 75°C)"
+                  
+                  - alert: GPUCriticalTemperature
+                    expr: DCGM_FI_DEV_GPU_TEMP > 85
+                    for: 2m
+                    labels:
+                      severity: critical
+                      category: gpu
+                    annotations:
+                      summary: "Critical GPU temperature on {{ '{{' }} $labels.Hostname {{ '}}' }}"
+                      description: "GPU {{ '{{' }} $labels.gpu {{ '}}' }} temperature is {{ '{{' }} $value | printf \"%.0f\" {{ '}}' }}°C. Immediate action required!"
+                  
+                  # GPU Memory Alerts
+                  - alert: GPUMemoryHighUsage
+                    expr: (DCGM_FI_DEV_FB_USED / (DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE)) * 100 > 90
+                    for: 5m
+                    labels:
+                      severity: warning
+                      category: gpu
+                    annotations:
+                      summary: "High GPU memory usage on {{ '{{' }} $labels.Hostname {{ '}}' }}"
+                      description: "GPU {{ '{{' }} $labels.gpu {{ '}}' }} memory is {{ '{{' }} $value | printf \"%.1f\" {{ '}}' }}% used"
+                  
+                  # GPU Power Alerts
+                  - alert: GPUHighPowerDraw
+                    expr: DCGM_FI_DEV_POWER_USAGE > 400
+                    for: 5m
+                    labels:
+                      severity: warning
+                      category: gpu
+                    annotations:
+                      summary: "High GPU power draw on {{ '{{' }} $labels.Hostname {{ '}}' }}"
+                      description: "GPU {{ '{{' }} $labels.gpu {{ '}}' }} is drawing {{ '{{' }} $value | printf \"%.0f\" {{ '}}' }}W (threshold: 400W)"
+    
+    - name: Apply GPU Alert Rules
+      command: k3s kubectl apply -f /tmp/gpu-alert-rules.yaml
+      register: gpu_rules
+    
+    - name: Create Power Alert Rules
+      copy:
+        dest: /tmp/power-alert-rules.yaml
+        mode: '0644'
+        content: |
+          apiVersion: monitoring.coreos.com/v1
+          kind: PrometheusRule
+          metadata:
+            name: vsf-power-alerts
+            namespace: {{ namespace }}
+            labels:
+              release: prometheus
+              vsf/component: alerting
+          spec:
+            groups:
+              - name: power.rules
+                rules:
+                  # Node Power Alerts
+                  - alert: NodeHighPowerConsumption
+                    expr: node_power_watts > 400
+                    for: 10m
+                    labels:
+                      severity: warning
+                      category: power
+                    annotations:
+                      summary: "High power consumption on {{ '{{' }} $labels.node_name {{ '}}' }}"
+                      description: "Node {{ '{{' }} $labels.node_name {{ '}}' }} is consuming {{ '{{' }} $value | printf \"%.0f\" {{ '}}' }}W (threshold: 400W)"
+                  
+                  - alert: NodeCriticalPowerConsumption
+                    expr: node_power_watts > 450
+                    for: 5m
+                    labels:
+                      severity: critical
+                      category: power
+                    annotations:
+                      summary: "Critical power consumption on {{ '{{' }} $labels.node_name {{ '}}' }}"
+                      description: "Node {{ '{{' }} $labels.node_name {{ '}}' }} is consuming {{ '{{' }} $value | printf \"%.0f\" {{ '}}' }}W. Check workloads!"
+                  
+                  # Energy Consumption Rate
+                  - alert: HighEnergyConsumptionRate
+                    expr: rate(kepler_node_platform_joules_total[5m]) > 300
+                    for: 10m
+                    labels:
+                      severity: warning
+                      category: power
+                    annotations:
+                      summary: "High energy consumption rate on {{ '{{' }} $labels.node_name {{ '}}' }}"
+                      description: "Node {{ '{{' }} $labels.node_name {{ '}}' }} energy rate: {{ '{{' }} $value | printf \"%.1f\" {{ '}}' }} J/s"
+                  
+                  # Container Power Anomaly
+                  - alert: ContainerHighPowerUsage
+                    expr: rate(kepler_container_joules_total[5m]) > 50
+                    for: 5m
+                    labels:
+                      severity: warning
+                      category: power
+                    annotations:
+                      summary: "Container {{ '{{' }} $labels.container_name {{ '}}' }} high power usage"
+                      description: "Container {{ '{{' }} $labels.container_name {{ '}}' }} in {{ '{{' }} $labels.container_namespace {{ '}}' }} is consuming {{ '{{' }} $value | printf \"%.1f\" {{ '}}' }} J/s"
+    
+    - name: Apply Power Alert Rules
+      command: k3s kubectl apply -f /tmp/power-alert-rules.yaml
+      register: power_rules
+    
+    - name: Create Cluster Health Alert Rules
+      copy:
+        dest: /tmp/cluster-alert-rules.yaml
+        mode: '0644'
+        content: |
+          apiVersion: monitoring.coreos.com/v1
+          kind: PrometheusRule
+          metadata:
+            name: vsf-cluster-alerts
+            namespace: {{ namespace }}
+            labels:
+              release: prometheus
+              vsf/component: alerting
+          spec:
+            groups:
+              - name: cluster.rules
+                rules:
+                  # Node Health
+                  - alert: NodeNotReady
+                    expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+                    for: 5m
+                    labels:
+                      severity: critical
+                      category: cluster
+                    annotations:
+                      summary: "Node {{ '{{' }} $labels.node {{ '}}' }} not ready"
+                      description: "Node {{ '{{' }} $labels.node {{ '}}' }} has been not ready for 5 minutes"
+                  
+                  # Pod Issues
+                  - alert: PodCrashLooping
+                    expr: rate(kube_pod_container_status_restarts_total[15m]) > 0.2
+                    for: 5m
+                    labels:
+                      severity: warning
+                      category: cluster
+                    annotations:
+                      summary: "Pod {{ '{{' }} $labels.pod {{ '}}' }} is crash looping"
+                      description: "Pod {{ '{{' }} $labels.pod {{ '}}' }} in {{ '{{' }} $labels.namespace {{ '}}' }} is restarting frequently"
+                  
+                  # GPU Node Availability
+                  - alert: GPUNodeUnavailable
+                    expr: count(kube_node_labels{label_vsf_node_type="gpu"} and on(node) kube_node_status_condition{condition="Ready",status="true"}) < 8
+                    for: 5m
+                    labels:
+                      severity: warning
+                      category: cluster
+                    annotations:
+                      summary: "Fewer than 8 GPU nodes available"
+                      description: "Only {{ '{{' }} $value {{ '}}' }} GPU nodes are ready (expected: 8)"
+                  
+                  # Monitoring Stack Health
+                  - alert: MockExporterDown
+                    expr: up{job=~"mock-dcgm-exporter|synthetic-power-exporter"} == 0
+                    for: 5m
+                    labels:
+                      severity: warning
+                      category: monitoring
+                    annotations:
+                      summary: "Mock exporter {{ '{{' }} $labels.job {{ '}}' }} is down"
+                      description: "The {{ '{{' }} $labels.job {{ '}}' }} on {{ '{{' }} $labels.instance {{ '}}' }} is not responding"
+    
+    - name: Apply Cluster Alert Rules
+      command: k3s kubectl apply -f /tmp/cluster-alert-rules.yaml
+      register: cluster_rules
+
+
+- name: Validate Alert Rules
+  hosts: control_plane[0]
+  become: true
+  vars:
+    namespace: monitoring
+    
+  tasks:
+    - name: Get all PrometheusRules
+      command: k3s kubectl get prometheusrule -n {{ namespace }} -l vsf/component=alerting
+      register: prom_rules
+      changed_when: false
+    
+    - name: Display PrometheusRules
+      debug:
+        msg: "{{ prom_rules.stdout_lines }}"
+    
+    - name: Count total alert rules
+      shell: |
+        k3s kubectl get prometheusrule -n {{ namespace }} -l vsf/component=alerting -o json | \
+        jq '[.items[].spec.groups[].rules | length] | add'
+      register: rule_count
+      changed_when: false
+    
+    - name: Verify Prometheus loaded the rules
+      shell: |
+        POD=$(k3s kubectl get pods -n {{ namespace }} -l app.kubernetes.io/name=prometheus -o jsonpath='{.items[0].metadata.name}')
+        k3s kubectl exec -n {{ namespace }} $POD -c prometheus -- wget -qO- http://localhost:9090/api/v1/rules 2>/dev/null | jq '.data.groups | length'
+      register: loaded_groups
+      changed_when: false
+      failed_when: false
+    
+    - name: Configuration summary
+      debug:
+        msg: |
+          ========================================
+          Prometheus Alert Rules Configured
+          ========================================
+          Namespace: {{ namespace }}
+          
+          PrometheusRules:
+          {{ prom_rules.stdout }}
+          
+          Total alert rules: {{ rule_count.stdout }}
+          Prometheus rule groups loaded: {{ loaded_groups.stdout | default('checking...') }}
+          
+          Alert Categories:
+          - GPU alerts (utilization, temperature, memory, power)
+          - Power alerts (node power, energy rate)
+          - Cluster alerts (node health, pod crashes)
+          
+          Verify alerts:
+          kubectl port-forward svc/prometheus-prometheus 9090:9090 -n {{ namespace }}
+          Then open: http://localhost:9090/alerts
+          ========================================
