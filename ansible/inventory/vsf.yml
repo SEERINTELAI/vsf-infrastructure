@@ -37,8 +37,8 @@ all:
           - "node-role.kubernetes.io/control-plane=true"
           - "vsf/node-type=control-plane"
     
-    # Standard worker nodes (10 nodes)
-    workers:
+    # Standard worker nodes - Batch 1 (Task 107)
+    workers_batch_1:
       hosts:
         vsf-worker-1:
           ansible_host: 192.168.100.21
@@ -50,6 +50,16 @@ all:
           ansible_host: 192.168.100.24
         vsf-worker-5:
           ansible_host: 192.168.100.25
+      vars:
+        k3s_role: agent
+        node_labels:
+          - "node-role.kubernetes.io/worker=true"
+          - "vsf/node-type=standard"
+          - "vsf/batch=1"
+    
+    # Standard worker nodes - Batch 2 (Task 108)
+    workers_batch_2:
+      hosts:
         vsf-worker-6:
           ansible_host: 192.168.100.26
         vsf-worker-7:
@@ -65,6 +75,13 @@ all:
         node_labels:
           - "node-role.kubernetes.io/worker=true"
           - "vsf/node-type=standard"
+          - "vsf/batch=2"
+    
+    # All standard workers (combined group)
+    workers:
+      children:
+        workers_batch_1:
+        workers_batch_2:
     
     # GPU worker nodes (8 nodes with GPU passthrough)
     gpu_workers:

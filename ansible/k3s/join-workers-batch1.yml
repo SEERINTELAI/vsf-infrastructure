@@ -1,0 +1,100 @@
+---
+# join-workers-batch1.yml
+# Join standard worker nodes 1-5 to K3s cluster (Task 107)
+#
+# Usage:
+#   ansible-playbook -i inventory/vsf.yml k3s/join-workers-batch1.yml
+
+- name: Get K3s join token from control plane
+  hosts: control_plane[0]
+  become: true
+  tasks:
+    - name: Read K3s node token
+      slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: k3s_token_file
+    
+    - name: Set token fact
+      set_fact:
+        k3s_node_token: "{{ k3s_token_file.content | b64decode | trim }}"
+    
+    - name: Get control plane endpoint
+      set_fact:
+        k3s_server_url: "https://{{ ansible_host }}:6443"
+
+
+- name: Join worker nodes batch 1 (vsf-worker-1 to vsf-worker-5)
+  hosts: workers_batch_1
+  become: true
+  serial: 2  # Join 2 at a time for stability
+  vars:
+    k3s_version: "{{ hostvars[groups['control_plane'][0]]['k3s_version'] | default('v1.29.0+k3s1') }}"
+    control_plane_host: "{{ groups['control_plane'][0] }}"
+    
+  tasks:
+    - name: Get token from control plane
+      set_fact:
+        k3s_token: "{{ hostvars[control_plane_host]['k3s_node_token'] }}"
+        k3s_url: "{{ hostvars[control_plane_host]['k3s_server_url'] }}"
+    
+    - name: Check if K3s is already installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+    
+    - name: Install K3s agent
+      when: not k3s_binary.stat.exists
+      shell: |
+        curl -sfL https://get.k3s.io | \
+          INSTALL_K3S_VERSION="{{ k3s_version }}" \
+          K3S_URL="{{ k3s_url }}" \
+          K3S_TOKEN="{{ k3s_token }}" \
+          sh -s - agent
+      args:
+        creates: /usr/local/bin/k3s
+    
+    - name: Wait for k3s-agent service to start
+      systemd:
+        name: k3s-agent
+        state: started
+        enabled: true
+    
+    - name: Wait for node to be registered
+      delegate_to: "{{ control_plane_host }}"
+      command: k3s kubectl get node {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      register: node_ready
+      until: node_ready.stdout == "True"
+      retries: 30
+      delay: 10
+      changed_when: false
+    
+    - name: Apply node labels
+      delegate_to: "{{ control_plane_host }}"
+      command: "k3s kubectl label node {{ inventory_hostname }} {{ item }} --overwrite"
+      loop: "{{ node_labels | default([]) }}"
+      changed_when: true
+
+
+- name: Validate batch 1 join
+  hosts: control_plane[0]
+  become: true
+  tasks:
+    - name: Get batch 1 nodes
+      shell: k3s kubectl get nodes -l vsf/batch=1 --no-headers
+      register: batch1_nodes
+      changed_when: false
+    
+    - name: Display batch 1 status
+      debug:
+        msg: |
+          ========================================
+          Batch 1 Workers Joined (Task 107)
+          ========================================
+          {{ batch1_nodes.stdout }}
+          ========================================
+    
+    - name: Verify 5 nodes joined
+      shell: k3s kubectl get nodes -l vsf/batch=1 --no-headers | wc -l
+      register: batch1_count
+      failed_when: batch1_count.stdout | int < 5
+      changed_when: false
