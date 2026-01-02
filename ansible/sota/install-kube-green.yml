@@ -1,0 +1,99 @@
+---
+# Install Kube-green (Schedule-Based Pod Suspension)
+#
+# Usage: ansible-playbook -i ../inventory/vsf.yml install-kube-green.yml
+#
+# Kube-green suspends pods during off-hours to save energy
+
+- name: Install Kube-green
+  hosts: k3s_control_plane[0]
+  become: true
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    kube_green_namespace: kube-green
+    kube_green_version: "0.5.0"
+  tasks:
+    - name: Check cluster health
+      command: kubectl --kubeconfig={{ kubeconfig }} cluster-info
+      register: cluster_info
+      changed_when: false
+
+    - name: Add Kube-green Helm repository
+      command: helm repo add kube-green https://kube-green.github.io/kube-green
+      register: helm_repo
+      changed_when: "'has been added' in helm_repo.stdout"
+      failed_when: false
+
+    - name: Update Helm repositories
+      command: helm repo update
+      changed_when: false
+
+    - name: Create Kube-green namespace
+      command: kubectl --kubeconfig={{ kubeconfig }} create namespace {{ kube_green_namespace }}
+      register: ns_create
+      changed_when: "'created' in ns_create.stdout"
+      failed_when: "'already exists' not in ns_create.stderr and ns_create.rc != 0"
+
+    - name: Install Kube-green via Helm
+      command: >
+        helm upgrade --install kube-green kube-green/kube-green
+        --namespace {{ kube_green_namespace }}
+        --version {{ kube_green_version }}
+        --kubeconfig {{ kubeconfig }}
+        --wait
+        --timeout 5m
+      register: helm_install
+      changed_when: "'has been upgraded' in helm_install.stdout or 'has been installed' in helm_install.stdout"
+
+    - name: Wait for Kube-green controller to be ready
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }}
+        wait --for=condition=available deployment/kube-green-controller-manager
+        --namespace {{ kube_green_namespace }}
+        --timeout=120s
+      register: controller_ready
+      changed_when: false
+
+    - name: Verify Kube-green CRD installed
+      command: kubectl --kubeconfig={{ kubeconfig }} get crd sleepinfos.kube-green.com
+      register: crd_check
+      changed_when: false
+
+    - name: Display Kube-green status
+      command: kubectl --kubeconfig={{ kubeconfig }} get pods -n {{ kube_green_namespace }}
+      register: pods_status
+      changed_when: false
+
+    - name: Show Kube-green pods
+      debug:
+        msg: "{{ pods_status.stdout_lines }}"
+
+    - name: Summary
+      debug:
+        msg: |
+          
+          ============================================
+          Kube-green Installed Successfully
+          ============================================
+          Version: {{ kube_green_version }}
+          Namespace: {{ kube_green_namespace }}
+          
+          CRD: SleepInfo
+          
+          Example SleepInfo:
+            apiVersion: kube-green.com/v1alpha1
+            kind: SleepInfo
+            metadata:
+              name: workloads-sleep
+              namespace: my-namespace
+            spec:
+              weekdays: "1-5"
+              sleepAt: "20:00"
+              wakeUpAt: "08:00"
+              timeZone: "America/New_York"
+              suspendCronJobs: true
+              excludeRef:
+              - apiVersion: apps/v1
+                kind: Deployment
+                name: critical-service
+          ============================================

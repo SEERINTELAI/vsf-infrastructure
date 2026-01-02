@@ -1,0 +1,127 @@
+---
+# Install KEDA (Kubernetes Event-Driven Autoscaling)
+#
+# Usage: ansible-playbook -i ../inventory/vsf.yml install-keda.yml
+#
+# KEDA enables autoscaling based on:
+# - Prometheus metrics
+# - CPU/Memory utilization
+# - Queue length (RabbitMQ, Kafka, etc.)
+# - Custom metrics
+
+- name: Install KEDA
+  hosts: k3s_control_plane[0]
+  become: true
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    keda_namespace: keda
+    keda_version: "2.13.0"
+    helm_values_file: "{{ playbook_dir }}/../../helm/keda/values.yaml"
+  tasks:
+    - name: Check cluster health
+      command: kubectl --kubeconfig={{ kubeconfig }} cluster-info
+      register: cluster_info
+      changed_when: false
+
+    - name: Add KEDA Helm repository
+      command: helm repo add kedacore https://kedacore.github.io/charts
+      register: helm_repo
+      changed_when: "'has been added' in helm_repo.stdout"
+      failed_when: false
+
+    - name: Update Helm repositories
+      command: helm repo update
+      changed_when: false
+
+    - name: Create KEDA namespace
+      command: kubectl --kubeconfig={{ kubeconfig }} create namespace {{ keda_namespace }}
+      register: ns_create
+      changed_when: "'created' in ns_create.stdout"
+      failed_when: "'already exists' not in ns_create.stderr and ns_create.rc != 0"
+
+    - name: Copy Helm values file
+      copy:
+        src: "{{ helm_values_file }}"
+        dest: /tmp/keda-values.yaml
+        mode: '0644'
+
+    - name: Install KEDA via Helm
+      command: >
+        helm upgrade --install keda kedacore/keda
+        --namespace {{ keda_namespace }}
+        --version {{ keda_version }}
+        --values /tmp/keda-values.yaml
+        --kubeconfig {{ kubeconfig }}
+        --wait
+        --timeout 5m
+      register: helm_install
+      changed_when: "'has been upgraded' in helm_install.stdout or 'has been installed' in helm_install.stdout"
+
+    - name: Wait for KEDA operator to be ready
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }}
+        wait --for=condition=available deployment/keda-operator
+        --namespace {{ keda_namespace }}
+        --timeout=120s
+      register: keda_ready
+      changed_when: false
+
+    - name: Wait for KEDA metrics server to be ready
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }}
+        wait --for=condition=available deployment/keda-operator-metrics-apiserver
+        --namespace {{ keda_namespace }}
+        --timeout=120s
+      register: metrics_ready
+      changed_when: false
+
+    - name: Verify KEDA CRDs installed
+      command: kubectl --kubeconfig={{ kubeconfig }} get crd scaledobjects.keda.sh
+      register: crd_check
+      changed_when: false
+
+    - name: Display KEDA status
+      command: kubectl --kubeconfig={{ kubeconfig }} get pods -n {{ keda_namespace }}
+      register: pods_status
+      changed_when: false
+
+    - name: Show KEDA pods
+      debug:
+        msg: "{{ pods_status.stdout_lines }}"
+
+    - name: Cleanup temp files
+      file:
+        path: /tmp/keda-values.yaml
+        state: absent
+
+    - name: Summary
+      debug:
+        msg: |
+          
+          ============================================
+          KEDA Installed Successfully
+          ============================================
+          Version: {{ keda_version }}
+          Namespace: {{ keda_namespace }}
+          
+          CRDs:
+            - ScaledObject (for Deployments)
+            - ScaledJob (for Jobs)
+            - TriggerAuthentication
+          
+          Example ScaledObject:
+            apiVersion: keda.sh/v1alpha1
+            kind: ScaledObject
+            metadata:
+              name: my-scaledobject
+            spec:
+              scaleTargetRef:
+                name: my-deployment
+              triggers:
+              - type: prometheus
+                metadata:
+                  serverAddress: http://prometheus:9090
+                  metricName: http_requests
+                  query: sum(rate(http_requests_total[2m]))
+                  threshold: '100'
+          ============================================

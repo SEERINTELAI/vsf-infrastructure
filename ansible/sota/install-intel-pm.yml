@@ -1,0 +1,121 @@
+---
+# Install Intel Kubernetes Power Manager
+#
+# Usage: ansible-playbook -i ../inventory/vsf.yml install-intel-pm.yml
+#
+# NOTE: Intel PM requires specific CPU features that may not be available in VMs.
+# This playbook includes pre-flight checks and graceful handling.
+
+- name: Install Intel Kubernetes Power Manager
+  hosts: k3s_control_plane[0]
+  become: true
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    intel_pm_namespace: intel-power
+    intel_pm_version: "v2.3.0"
+  tasks:
+    - name: Check if running in VM
+      command: systemd-detect-virt
+      register: virt_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display virtualization status
+      debug:
+        msg: "Virtualization: {{ virt_check.stdout | default('none') }}"
+
+    - name: Warn if running in VM
+      debug:
+        msg: |
+          ⚠️ WARNING: Running in virtualized environment ({{ virt_check.stdout }})
+          Intel Power Manager may have limited functionality.
+          P-states and C-states may not be controllable.
+      when: virt_check.rc == 0 and virt_check.stdout != 'none'
+
+    - name: Check for Intel CPU
+      shell: grep -c "GenuineIntel" /proc/cpuinfo || echo "0"
+      register: intel_cpu
+      changed_when: false
+
+    - name: Skip if not Intel CPU
+      debug:
+        msg: "Skipping Intel PM - No Intel CPU detected"
+      when: intel_cpu.stdout | int == 0
+
+    - name: Create Intel PM namespace
+      command: kubectl --kubeconfig={{ kubeconfig }} create namespace {{ intel_pm_namespace }}
+      register: ns_create
+      changed_when: "'created' in ns_create.stdout"
+      failed_when: "'already exists' not in ns_create.stderr and ns_create.rc != 0"
+      when: intel_cpu.stdout | int > 0
+
+    - name: Apply Intel Power Manager manifests
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} apply -f
+        https://raw.githubusercontent.com/intel/kubernetes-power-manager/{{ intel_pm_version }}/deploy/node-agent.yaml
+      register: install_result
+      changed_when: "'created' in install_result.stdout or 'configured' in install_result.stdout"
+      failed_when: false
+      when: intel_cpu.stdout | int > 0
+
+    - name: Check Intel PM DaemonSet status
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }}
+        get daemonset -n {{ intel_pm_namespace }} -o wide
+      register: ds_status
+      changed_when: false
+      failed_when: false
+      when: intel_cpu.stdout | int > 0
+
+    - name: Display Intel PM status
+      debug:
+        msg: "{{ ds_status.stdout_lines | default(['Not installed']) }}"
+      when: intel_cpu.stdout | int > 0
+
+    - name: Create fallback status ConfigMap
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} apply -f - 
+      args:
+        stdin: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: intel-pm-status
+            namespace: {{ intel_pm_namespace }}
+          data:
+            status: "{{ 'limited' if virt_check.stdout != 'none' else 'full' }}"
+            virtualized: "{{ 'true' if virt_check.stdout != 'none' else 'false' }}"
+            cpu_vendor: "{{ 'intel' if intel_cpu.stdout | int > 0 else 'other' }}"
+      register: configmap_result
+      changed_when: "'created' in configmap_result.stdout or 'configured' in configmap_result.stdout"
+      when: intel_cpu.stdout | int > 0
+
+    - name: Summary
+      debug:
+        msg: |
+          
+          ============================================
+          Intel Power Manager Installation
+          ============================================
+          Namespace: {{ intel_pm_namespace }}
+          CPU Vendor: {{ 'Intel' if intel_cpu.stdout | int > 0 else 'Non-Intel' }}
+          Virtualized: {{ virt_check.stdout | default('unknown') }}
+          
+          Status: {{ 'Limited (VM)' if virt_check.stdout != 'none' else 'Full' }}
+          
+          {% if virt_check.stdout != 'none' %}
+          ⚠️ Running in VM - Power profiles may not be effective.
+          Consider using other optimization methods.
+          {% endif %}
+          
+          Example PowerProfile (when supported):
+            apiVersion: power.intel.com/v1
+            kind: PowerProfile
+            metadata:
+              name: performance
+            spec:
+              name: performance
+              max: 100
+              min: 80
+              epp: performance
+          ============================================

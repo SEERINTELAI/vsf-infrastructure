@@ -1,0 +1,61 @@
+# KEDA Helm Values for VSF
+# Event-driven autoscaling
+
+# KEDA Operator
+operator:
+  replicaCount: 1
+  
+# Metrics Server
+metricsServer:
+  replicaCount: 1
+
+# Prometheus integration
+prometheus:
+  metricServer:
+    enabled: true
+    port: 9022
+  operator:
+    enabled: true
+    port: 8080
+
+# Webhooks
+webhooks:
+  enabled: true
+
+# Resources
+resources:
+  operator:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  metricsServer:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Pod disruption budget
+podDisruptionBudget:
+  operator:
+    minAvailable: 1
+  metricsServer:
+    minAvailable: 1
+
+# Logging
+logging:
+  operator:
+    level: info
+  metricsServer:
+    level: info
+
+# Service Monitor for Prometheus
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+  labels:
+    release: prometheus
