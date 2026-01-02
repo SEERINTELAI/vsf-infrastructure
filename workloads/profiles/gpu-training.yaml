@@ -1,0 +1,44 @@
+# GPU Training Workload Profile
+# Simulates ML training job (mock mode compatible)
+
+name: gpu-training-workload
+type: job
+namespace: vsf-workloads
+parallelism: 2
+completions: 4
+resources:
+  requests:
+    cpu: "500m"
+    memory: "2Gi"
+    nvidia.com/gpu: "1"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+    nvidia.com/gpu: "1"
+intensity: 0.8
+pattern: batch-gpu
+duration_seconds: 600
+image: nvcr.io/nvidia/cuda:12.0-base
+command:
+  - sh
+  - -c
+  - |
+    echo "Starting GPU training simulation"
+    nvidia-smi || echo "Mock mode - no real GPU"
+    # Simulate training iterations
+    for i in $(seq 1 60); do
+      echo "Training epoch $i/60"
+      sleep 10
+    done
+    echo "Training complete"
+node_selector:
+  gpu: "true"
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+labels:
+  workload-type: gpu-training
+  experiment: energy-optimization
+  gpu-workload: "true"
+  vsf-workload: "true"
