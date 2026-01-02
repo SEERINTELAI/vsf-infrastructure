@@ -15,10 +15,23 @@ logger = logging.getLogger(__name__)
 
 def pytest_configure(config):
     """Register custom pytest markers."""
+    # General categories
     config.addinivalue_line("markers", "infrastructure: Infrastructure validation tests")
     config.addinivalue_line("markers", "kubernetes: Kubernetes cluster tests")
     config.addinivalue_line("markers", "monitoring: Monitoring stack tests")
     config.addinivalue_line("markers", "integration: Integration tests (may modify state)")
+    
+    # Monitoring pre-mortem categories (DP:ETG)
+    config.addinivalue_line("markers", "service_availability: Service availability tests")
+    config.addinivalue_line("markers", "metrics_collection: Metrics collection tests")
+    config.addinivalue_line("markers", "data_integrity: Data integrity tests")
+    config.addinivalue_line("markers", "alerting: Alerting configuration tests")
+    config.addinivalue_line("markers", "dashboard: Dashboard configuration tests")
+    config.addinivalue_line("markers", "resource_exhaustion: Resource exhaustion tests")
+    
+    # Component-specific markers
+    config.addinivalue_line("markers", "gpu_metrics: GPU metrics tests")
+    config.addinivalue_line("markers", "power_metrics: Power metrics tests")
 
 @pytest.fixture
 def project_root() -> Path:
