@@ -40,6 +40,15 @@ def pytest_configure(config):
     # Component-specific markers
     config.addinivalue_line("markers", "gpu_metrics: GPU metrics tests")
     config.addinivalue_line("markers", "power_metrics: Power metrics tests")
+    
+    # K8s Probe pre-mortem categories (DP:ETG)
+    config.addinivalue_line("markers", "k8s_probe: K8s Probe MCP tests")
+    config.addinivalue_line("markers", "connection: MCP connection failure tests")
+    config.addinivalue_line("markers", "node_control: Node cordon/drain tests")
+    config.addinivalue_line("markers", "workload: Pod scheduling/consolidation tests")
+    config.addinivalue_line("markers", "metrics: Cluster metrics tests")
+    config.addinivalue_line("markers", "permission: RBAC/permission tests")
+    config.addinivalue_line("markers", "state: State consistency tests")
 
 @pytest.fixture
 def project_root() -> Path:
