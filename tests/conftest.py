@@ -55,6 +55,9 @@ def pytest_configure(config):
     
     # Workload Generation tests (F10.5 Track A)
     config.addinivalue_line("markers", "workload_gen: Workload generation tests")
+    
+    # Experiment Framework tests (F10.5 Track B)
+    config.addinivalue_line("markers", "experiment: Experiment framework tests")
 
 @pytest.fixture
 def project_root() -> Path:
