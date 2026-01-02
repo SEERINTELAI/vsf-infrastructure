@@ -61,6 +61,12 @@ def pytest_configure(config):
     
     # Analysis & Reporting tests (F10.5 Track C)
     config.addinivalue_line("markers", "analysis: Analysis and reporting tests")
+    
+    # SOTA Integration tests (F10.3)
+    config.addinivalue_line("markers", "sota: SOTA system integration tests")
+    config.addinivalue_line("markers", "keda: KEDA-specific tests")
+    config.addinivalue_line("markers", "intel_pm: Intel Power Manager tests")
+    config.addinivalue_line("markers", "kube_green: Kube-green tests")
 
 @pytest.fixture
 def project_root() -> Path:
