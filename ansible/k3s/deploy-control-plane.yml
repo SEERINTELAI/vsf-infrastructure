@@ -1,0 +1,276 @@
+---
+# deploy-control-plane.yml
+# Deploy K3s HA control plane on 3 nodes with embedded etcd
+#
+# Usage:
+#   ansible-playbook -i inventory/vsf.yml k3s/deploy-control-plane.yml
+#
+# Requirements:
+#   - SSH access to control plane VMs
+#   - K3S_TOKEN environment variable set (or use default)
+#
+# This playbook:
+#   1. Prepares all control plane nodes
+#   2. Initializes K3s on first node (--cluster-init)
+#   3. Joins remaining nodes to the cluster
+#   4. Configures kubectl and copies kubeconfig
+#   5. Validates the cluster is healthy
+
+- name: Prepare control plane nodes
+  hosts: control_plane
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+      
+    - name: Install required packages
+      apt:
+        name:
+          - curl
+          - ca-certificates
+          - open-iscsi  # For Longhorn storage later
+          - nfs-common  # For NFS storage
+        state: present
+    
+    - name: Disable swap
+      command: swapoff -a
+      changed_when: false
+    
+    - name: Remove swap from fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '\sswap\s'
+        state: absent
+    
+    - name: Enable IP forwarding
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        sysctl_set: true
+        state: present
+        reload: true
+    
+    - name: Enable bridge-nf-call-iptables
+      sysctl:
+        name: "{{ item }}"
+        value: '1'
+        sysctl_set: true
+        state: present
+        reload: true
+      loop:
+        - net.bridge.bridge-nf-call-iptables
+        - net.bridge.bridge-nf-call-ip6tables
+      ignore_errors: true  # May not exist if br_netfilter not loaded
+    
+    - name: Load br_netfilter module
+      modprobe:
+        name: br_netfilter
+        state: present
+    
+    - name: Ensure br_netfilter loads on boot
+      lineinfile:
+        path: /etc/modules-load.d/k8s.conf
+        line: br_netfilter
+        create: true
+        mode: '0644'
+
+
+- name: Initialize K3s on first control plane node
+  hosts: control_plane
+  become: true
+  serial: 1  # One at a time
+  tasks:
+    - name: Check if K3s is already installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+    
+    - name: Get first control plane node
+      set_fact:
+        first_server: "{{ groups['control_plane'][0] }}"
+    
+    - name: Initialize K3s cluster on first node
+      when: 
+        - inventory_hostname == first_server
+        - not k3s_binary.stat.exists
+      block:
+        - name: Download K3s install script
+          get_url:
+            url: https://get.k3s.io
+            dest: /tmp/k3s-install.sh
+            mode: '0755'
+        
+        - name: Install K3s server (cluster-init)
+          environment:
+            INSTALL_K3S_VERSION: "{{ k3s_version }}"
+            K3S_TOKEN: "{{ k3s_token }}"
+          command: >
+            /tmp/k3s-install.sh server
+            --cluster-init
+            --tls-san {{ ansible_host }}
+            --tls-san {{ inventory_hostname }}
+            --tls-san vsf-k3s-api.local
+            --disable traefik
+            --disable servicelb
+            --flannel-backend none
+            --cluster-cidr {{ cluster_cidr }}
+            --service-cidr {{ service_cidr }}
+            --cluster-dns {{ cluster_dns }}
+            --write-kubeconfig-mode 644
+          args:
+            creates: /etc/rancher/k3s/k3s.yaml
+        
+        - name: Wait for K3s to be ready
+          command: k3s kubectl get nodes
+          register: k3s_nodes
+          until: k3s_nodes.rc == 0
+          retries: 30
+          delay: 10
+        
+        - name: Apply node labels
+          command: "k3s kubectl label node {{ inventory_hostname }} {{ item }} --overwrite"
+          loop: "{{ node_labels | default([]) }}"
+          ignore_errors: true
+    
+    - name: Join remaining control plane nodes
+      when:
+        - inventory_hostname != first_server
+        - not k3s_binary.stat.exists
+      block:
+        - name: Wait for first server to be ready
+          delegate_to: "{{ first_server }}"
+          command: k3s kubectl get nodes
+          register: first_server_ready
+          until: first_server_ready.rc == 0
+          retries: 30
+          delay: 10
+        
+        - name: Get first server IP
+          set_fact:
+            first_server_ip: "{{ hostvars[first_server]['ansible_host'] }}"
+        
+        - name: Download K3s install script
+          get_url:
+            url: https://get.k3s.io
+            dest: /tmp/k3s-install.sh
+            mode: '0755'
+        
+        - name: Join K3s cluster as server
+          environment:
+            INSTALL_K3S_VERSION: "{{ k3s_version }}"
+            K3S_TOKEN: "{{ k3s_token }}"
+          command: >
+            /tmp/k3s-install.sh server
+            --server https://{{ first_server_ip }}:6443
+            --tls-san {{ ansible_host }}
+            --tls-san {{ inventory_hostname }}
+            --disable traefik
+            --disable servicelb
+            --flannel-backend none
+            --cluster-cidr {{ cluster_cidr }}
+            --service-cidr {{ service_cidr }}
+            --cluster-dns {{ cluster_dns }}
+            --write-kubeconfig-mode 644
+          args:
+            creates: /etc/rancher/k3s/k3s.yaml
+        
+        - name: Wait for node to join
+          command: k3s kubectl get nodes {{ inventory_hostname }}
+          register: node_joined
+          until: node_joined.rc == 0
+          retries: 30
+          delay: 10
+        
+        - name: Apply node labels
+          command: "k3s kubectl label node {{ inventory_hostname }} {{ item }} --overwrite"
+          loop: "{{ node_labels | default([]) }}"
+          ignore_errors: true
+
+
+- name: Configure kubectl access
+  hosts: control_plane[0]
+  become: true
+  tasks:
+    - name: Copy kubeconfig to standard location
+      copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: /root/.kube/config
+        remote_src: true
+        mode: '0600'
+    
+    - name: Update kubeconfig server address
+      replace:
+        path: /root/.kube/config
+        regexp: 'server: https://127.0.0.1:6443'
+        replace: 'server: https://{{ ansible_host }}:6443'
+    
+    - name: Fetch kubeconfig to local machine
+      fetch:
+        src: /root/.kube/config
+        dest: "{{ playbook_dir }}/../kubeconfig-vsf.yaml"
+        flat: true
+    
+    - name: Display kubeconfig location
+      debug:
+        msg: "Kubeconfig saved to: {{ playbook_dir }}/../kubeconfig-vsf.yaml"
+
+
+- name: Validate cluster health
+  hosts: control_plane[0]
+  become: true
+  tasks:
+    - name: Get cluster nodes
+      command: k3s kubectl get nodes -o wide
+      register: cluster_nodes
+      changed_when: false
+    
+    - name: Display cluster nodes
+      debug:
+        msg: "{{ cluster_nodes.stdout_lines }}"
+    
+    - name: Check all control plane nodes are Ready
+      command: k3s kubectl get nodes -l node-role.kubernetes.io/control-plane=true -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}'
+      register: node_status
+      failed_when: "'False' in node_status.stdout or 'Unknown' in node_status.stdout"
+      changed_when: false
+    
+    - name: Get cluster component status
+      command: k3s kubectl get componentstatuses
+      register: component_status
+      changed_when: false
+      ignore_errors: true  # Deprecated in newer K8s
+    
+    - name: Check kube-system pods
+      command: k3s kubectl get pods -n kube-system
+      register: kube_system_pods
+      changed_when: false
+    
+    - name: Display kube-system pods
+      debug:
+        msg: "{{ kube_system_pods.stdout_lines }}"
+    
+    - name: Validate etcd cluster health
+      command: >
+        k3s kubectl exec -n kube-system 
+        $(k3s kubectl get pods -n kube-system -l component=etcd -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "etcd-{{ inventory_hostname }}")
+        -- etcdctl endpoint health --cluster
+      register: etcd_health
+      changed_when: false
+      ignore_errors: true  # K3s embedded etcd may not have etcdctl
+    
+    - name: Final cluster status summary
+      debug:
+        msg: |
+          ========================================
+          K3s HA Control Plane Deployment Complete
+          ========================================
+          Cluster Nodes: {{ (cluster_nodes.stdout_lines | length) - 1 }}
+          Kubeconfig: {{ playbook_dir }}/../kubeconfig-vsf.yaml
+          
+          Next Steps:
+          1. Install CNI (Calico): ansible-playbook k3s/install-calico.yml
+          2. Join worker nodes: ansible-playbook k3s/join-workers.yml
+          ========================================
