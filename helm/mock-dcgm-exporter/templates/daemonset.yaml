@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "mock-dcgm-exporter.fullname" . }}
+  labels:
+    {{- include "mock-dcgm-exporter.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "mock-dcgm-exporter.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mock-dcgm-exporter.labels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.metrics.port }}"
+        prometheus.io/path: "/metrics"
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: mock-dcgm-exporter
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python3
+            - /app/mock_dcgm_exporter.py
+          env:
+            - name: METRICS_PORT
+              value: "{{ .Values.metrics.port }}"
+            - name: METRICS_INTERVAL
+              value: "{{ .Values.metrics.interval }}"
+            - name: GPUS_PER_NODE
+              value: "{{ .Values.gpuSimulation.gpusPerNode }}"
+            - name: GPU_MODEL
+              value: "{{ .Values.gpuSimulation.gpuModel }}"
+            - name: GPU_MEMORY_MIB
+              value: "{{ .Values.gpuSimulation.gpuMemoryMiB }}"
+            - name: WORKLOAD_PROFILE
+              value: "{{ .Values.gpuSimulation.defaultProfile }}"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: script
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: {{ include "mock-dcgm-exporter.fullname" . }}-script
+            defaultMode: 0755

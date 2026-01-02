@@ -1,0 +1,23 @@
+apiVersion: v2
+name: mock-dcgm-exporter
+description: Mock DCGM Exporter for VSF - provides synthetic GPU metrics in Prometheus format
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - gpu
+  - nvidia
+  - dcgm
+  - mock
+  - prometheus
+  - metrics
+maintainers:
+  - name: VSF Team
+    email: vsf@seerintel.ai
+home: https://github.com/SEERINTELAI/vsf-infrastructure
+sources:
+  - https://github.com/SEERINTELAI/vsf-infrastructure/tree/main/helm/mock-dcgm-exporter
+annotations:
+  category: Monitoring
+  vsf/mock-mode: "true"
+  vsf/upgradeable-to: "nvidia-gpu-operator"

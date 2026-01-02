@@ -1,0 +1,93 @@
+# Mock DCGM Exporter Values
+# Provides synthetic GPU metrics matching real DCGM exporter schema
+
+replicaCount: 1
+
+image:
+  repository: python
+  tag: "3.11-slim"
+  pullPolicy: IfNotPresent
+
+# Metrics configuration
+metrics:
+  # Port to expose Prometheus metrics
+  port: 9400
+  # Update interval for metrics (seconds)
+  interval: 15
+  
+# GPU simulation configuration
+gpuSimulation:
+  # Number of GPUs to simulate per node
+  gpusPerNode: 1
+  # GPU model name to report
+  gpuModel: "NVIDIA RTX 4090"
+  # GPU memory in MiB
+  gpuMemoryMiB: 24576
+  
+  # Workload profiles for metrics variation
+  profiles:
+    idle:
+      gpuUtilizationMin: 0
+      gpuUtilizationMax: 5
+      memoryUsedMin: 500
+      memoryUsedMax: 1000
+      powerDrawMin: 50
+      powerDrawMax: 80
+      temperatureMin: 35
+      temperatureMax: 45
+    
+    moderate:
+      gpuUtilizationMin: 20
+      gpuUtilizationMax: 60
+      memoryUsedMin: 4000
+      memoryUsedMax: 12000
+      powerDrawMin: 150
+      powerDrawMax: 280
+      temperatureMin: 55
+      temperatureMax: 70
+    
+    heavy:
+      gpuUtilizationMin: 80
+      gpuUtilizationMax: 100
+      memoryUsedMin: 18000
+      memoryUsedMax: 23000
+      powerDrawMin: 350
+      powerDrawMax: 450
+      temperatureMin: 70
+      temperatureMax: 85
+  
+  # Default profile (can be changed via ConfigMap)
+  defaultProfile: "moderate"
+
+# ServiceMonitor for Prometheus Operator
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  labels:
+    release: prometheus
+
+# Node selector for GPU nodes
+nodeSelector:
+  vsf/node-type: gpu
+
+# Tolerations for GPU taints
+tolerations:
+  - key: "nvidia.com/gpu"
+    operator: "Equal"
+    value: "true"
+    effect: "NoSchedule"
+
+# Resources for the mock exporter
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# Labels to add to all resources
+labels: {}
+
+# Annotations to add to all resources
+annotations: {}
