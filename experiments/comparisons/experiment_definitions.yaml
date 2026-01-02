@@ -1,0 +1,242 @@
+# Comparative Experiment Definitions
+#
+# Experiments comparing AgentOne with SOTA systems
+
+experiments:
+  # ============================================
+  # Experiment 1: Baseline vs KEDA
+  # ============================================
+  - id: exp-keda-vs-baseline
+    name: "KEDA Event-Driven Scaling vs Baseline"
+    description: |
+      Compare KEDA's event-driven autoscaling with unoptimized baseline.
+      Focus on CPU-bound workloads with variable load patterns.
+    
+    phases:
+      - name: baseline
+        duration_seconds: 3600
+        optimization: none
+        workload: bursty-api
+        metrics:
+          - power_watts
+          - energy_joules
+          - pod_count
+          - cpu_utilization
+      
+      - name: keda-enabled
+        duration_seconds: 3600
+        optimization: keda
+        workload: bursty-api
+        config:
+          scaledobject:
+            triggers:
+              - type: cpu
+                threshold: 60
+            minReplicas: 1
+            maxReplicas: 10
+        metrics:
+          - power_watts
+          - energy_joules
+          - pod_count
+          - cpu_utilization
+          - keda_scaler_activity
+    
+    success_criteria:
+      - metric: energy_joules
+        improvement_percent: 10
+      - metric: avg_response_time
+        max_degradation_percent: 5
+
+  # ============================================
+  # Experiment 2: Baseline vs Kube-green
+  # ============================================
+  - id: exp-kubegreen-vs-baseline
+    name: "Kube-green Schedule Suspension vs Baseline"
+    description: |
+      Compare Kube-green's schedule-based suspension with 24/7 baseline.
+      Measure energy savings during off-hours.
+    
+    phases:
+      - name: baseline-24h
+        duration_seconds: 86400
+        optimization: none
+        workload: web-server
+        metrics:
+          - power_watts
+          - energy_joules
+          - pod_count
+      
+      - name: kubegreen-enabled
+        duration_seconds: 86400
+        optimization: kube-green
+        workload: web-server
+        config:
+          sleepinfo:
+            sleepAt: "22:00"
+            wakeUpAt: "06:00"
+            weekdays: "1-5"
+        metrics:
+          - power_watts
+          - energy_joules
+          - pod_count
+          - suspended_hours
+    
+    success_criteria:
+      - metric: energy_joules
+        improvement_percent: 25  # Expecting ~8 hours of suspension
+
+  # ============================================
+  # Experiment 3: AgentOne vs KEDA
+  # ============================================
+  - id: exp-agentone-vs-keda
+    name: "AgentOne Optimization vs KEDA"
+    description: |
+      Compare AgentOne's holistic optimization with KEDA's autoscaling.
+      AgentOne can optimize CPU governor + scaling; KEDA only scaling.
+    
+    phases:
+      - name: keda-only
+        duration_seconds: 3600
+        optimization: keda
+        workload: mixed-workload
+        config:
+          scaledobject:
+            triggers:
+              - type: prometheus
+                query: "sum(rate(http_requests_total[2m]))"
+                threshold: 100
+        metrics:
+          - power_watts
+          - energy_joules
+          - pod_count
+          - cpu_governor
+      
+      - name: agentone-full
+        duration_seconds: 3600
+        optimization: agentone
+        workload: mixed-workload
+        config:
+          strategies:
+            - cpu_governor_tuning
+            - workload_consolidation
+            - replica_scaling
+        metrics:
+          - power_watts
+          - energy_joules
+          - pod_count
+          - cpu_governor
+          - node_power_state
+    
+    success_criteria:
+      - metric: energy_joules
+        improvement_percent: 5  # AgentOne should do better
+
+  # ============================================
+  # Experiment 4: AgentOne vs Kube-green
+  # ============================================
+  - id: exp-agentone-vs-kubegreen
+    name: "AgentOne Dynamic vs Kube-green Schedule"
+    description: |
+      Compare AgentOne's dynamic optimization with Kube-green's schedule.
+      AgentOne can react in real-time; Kube-green is schedule-based.
+    
+    phases:
+      - name: kubegreen-schedule
+        duration_seconds: 86400
+        optimization: kube-green
+        workload: diurnal
+        config:
+          sleepinfo:
+            sleepAt: "20:00"
+            wakeUpAt: "08:00"
+        metrics:
+          - power_watts
+          - energy_joules
+          - availability_percent
+      
+      - name: agentone-dynamic
+        duration_seconds: 86400
+        optimization: agentone
+        workload: diurnal
+        config:
+          strategies:
+            - dynamic_consolidation
+            - idle_node_power_down
+        metrics:
+          - power_watts
+          - energy_joules
+          - availability_percent
+          - optimization_events
+    
+    success_criteria:
+      - metric: availability_percent
+        improvement_percent: 0  # Maintain availability
+      - metric: energy_joules
+        improvement_percent: 10
+
+  # ============================================
+  # Experiment 5: Combined SOTA vs AgentOne
+  # ============================================
+  - id: exp-combined-vs-agentone
+    name: "Combined SOTA Stack vs AgentOne"
+    description: |
+      Compare all SOTA systems working together against AgentOne alone.
+      This is the ultimate comparison for holistic optimization.
+    
+    phases:
+      - name: all-sota
+        duration_seconds: 86400
+        optimization:
+          - keda
+          - kube-green
+          - carbon-aware
+        workload: production-mix
+        config:
+          keda:
+            enabled: true
+          kubegreen:
+            enabled: true
+          carbon:
+            enabled: true
+            shift_to_low_carbon: true
+        metrics:
+          - power_watts
+          - energy_joules
+          - carbon_grams
+          - availability_percent
+      
+      - name: agentone-only
+        duration_seconds: 86400
+        optimization: agentone
+        workload: production-mix
+        config:
+          strategies:
+            - full_stack_optimization
+          carbon_aware: true
+        metrics:
+          - power_watts
+          - energy_joules
+          - carbon_grams
+          - availability_percent
+          - optimization_events
+    
+    success_criteria:
+      - metric: energy_joules
+        comparison: parity  # At least match SOTA
+      - metric: carbon_grams
+        comparison: parity
+
+# Shared configuration
+shared:
+  warmup_seconds: 300
+  cooldown_seconds: 600
+  metric_interval_seconds: 30
+  repetitions: 3
+  
+  prometheus:
+    url: http://prometheus.monitoring.svc:9090
+  
+  safety:
+    max_power_watts: 2200
+    max_gpu_temp_c: 85
+    emergency_stop: true
