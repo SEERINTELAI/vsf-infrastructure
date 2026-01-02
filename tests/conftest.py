@@ -8,6 +8,18 @@ import pytest
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# Pytest Marker Registration
+# =============================================================================
+
+def pytest_configure(config):
+    """Register custom pytest markers."""
+    config.addinivalue_line("markers", "infrastructure: Infrastructure validation tests")
+    config.addinivalue_line("markers", "kubernetes: Kubernetes cluster tests")
+    config.addinivalue_line("markers", "monitoring: Monitoring stack tests")
+    config.addinivalue_line("markers", "integration: Integration tests (may modify state)")
+
 @pytest.fixture
 def project_root() -> Path:
     return Path(__file__).parent.parent
