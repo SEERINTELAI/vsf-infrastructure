@@ -1,0 +1,339 @@
+---
+# configure-gpu-affinity.yml
+# Configure GPU node affinity and scheduling rules (Task 112)
+#
+# Usage:
+#   ansible-playbook -i inventory/vsf.yml k3s/configure-gpu-affinity.yml
+#
+# This playbook:
+#   1. Applies GPU-specific labels to nodes
+#   2. Creates PriorityClass for GPU workloads
+#   3. Creates ResourceQuota for GPU namespace
+#   4. Sets up LimitRange for GPU pods
+#   5. Creates sample GPU affinity PodPreset/RuntimeClass
+
+- name: Configure GPU Node Affinity
+  hosts: control_plane[0]
+  become: true
+  vars:
+    gpu_namespace: gpu-workloads
+    
+  tasks:
+    - name: Verify GPU nodes are labeled
+      command: k3s kubectl get nodes -l vsf/node-type=gpu -o name
+      register: gpu_nodes
+      changed_when: false
+      failed_when: gpu_nodes.stdout_lines | length == 0
+    
+    - name: Display GPU nodes
+      debug:
+        msg: "Found {{ gpu_nodes.stdout_lines | length }} GPU nodes: {{ gpu_nodes.stdout_lines }}"
+    
+    - name: Create gpu-workloads namespace
+      command: k3s kubectl create namespace {{ gpu_namespace }} --dry-run=client -o yaml
+      register: ns_yaml
+      changed_when: false
+    
+    - name: Apply gpu-workloads namespace
+      command: k3s kubectl apply -f -
+      args:
+        stdin: "{{ ns_yaml.stdout }}"
+    
+    - name: Label gpu-workloads namespace
+      command: >
+        k3s kubectl label namespace {{ gpu_namespace }}
+        vsf/gpu-enabled=true
+        --overwrite
+    
+    - name: Create GPU PriorityClass
+      copy:
+        dest: /tmp/gpu-priority-class.yaml
+        mode: '0644'
+        content: |
+          apiVersion: scheduling.k8s.io/v1
+          kind: PriorityClass
+          metadata:
+            name: gpu-high-priority
+            labels:
+              vsf/component: scheduling
+          value: 1000000
+          globalDefault: false
+          description: "High priority class for GPU workloads"
+          ---
+          apiVersion: scheduling.k8s.io/v1
+          kind: PriorityClass
+          metadata:
+            name: gpu-low-priority
+            labels:
+              vsf/component: scheduling
+          value: 100000
+          globalDefault: false
+          description: "Low priority class for preemptible GPU workloads"
+    
+    - name: Apply GPU PriorityClasses
+      command: k3s kubectl apply -f /tmp/gpu-priority-class.yaml
+    
+    - name: Create GPU ResourceQuota
+      copy:
+        dest: /tmp/gpu-resource-quota.yaml
+        mode: '0644'
+        content: |
+          apiVersion: v1
+          kind: ResourceQuota
+          metadata:
+            name: gpu-quota
+            namespace: {{ gpu_namespace }}
+            labels:
+              vsf/component: quota
+          spec:
+            hard:
+              # Limit total GPU requests in namespace
+              requests.nvidia.com/gpu: "8"
+              limits.nvidia.com/gpu: "8"
+              # Pod limits
+              pods: "32"
+              # CPU/Memory limits for GPU pods
+              requests.cpu: "64"
+              requests.memory: "256Gi"
+              limits.cpu: "128"
+              limits.memory: "512Gi"
+    
+    - name: Apply GPU ResourceQuota
+      command: k3s kubectl apply -f /tmp/gpu-resource-quota.yaml
+    
+    - name: Create GPU LimitRange
+      copy:
+        dest: /tmp/gpu-limit-range.yaml
+        mode: '0644'
+        content: |
+          apiVersion: v1
+          kind: LimitRange
+          metadata:
+            name: gpu-limits
+            namespace: {{ gpu_namespace }}
+            labels:
+              vsf/component: limits
+          spec:
+            limits:
+            - type: Container
+              default:
+                cpu: "2"
+                memory: "8Gi"
+              defaultRequest:
+                cpu: "1"
+                memory: "4Gi"
+              max:
+                cpu: "16"
+                memory: "64Gi"
+              min:
+                cpu: "100m"
+                memory: "256Mi"
+            - type: Pod
+              max:
+                cpu: "32"
+                memory: "128Gi"
+    
+    - name: Apply GPU LimitRange
+      command: k3s kubectl apply -f /tmp/gpu-limit-range.yaml
+    
+    - name: Create GPU scheduling ConfigMap (affinity templates)
+      copy:
+        dest: /tmp/gpu-scheduling-config.yaml
+        mode: '0644'
+        content: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: gpu-scheduling-templates
+            namespace: {{ gpu_namespace }}
+            labels:
+              vsf/component: scheduling
+          data:
+            # Template for required GPU affinity
+            required-gpu-affinity.yaml: |
+              affinity:
+                nodeAffinity:
+                  requiredDuringSchedulingIgnoredDuringExecution:
+                    nodeSelectorTerms:
+                    - matchExpressions:
+                      - key: vsf/node-type
+                        operator: In
+                        values:
+                        - gpu
+                      - key: nvidia.com/gpu.present
+                        operator: In
+                        values:
+                        - "true"
+              tolerations:
+              - key: "nvidia.com/gpu"
+                operator: "Equal"
+                value: "true"
+                effect: "NoSchedule"
+            
+            # Template for preferred GPU affinity (soft)
+            preferred-gpu-affinity.yaml: |
+              affinity:
+                nodeAffinity:
+                  preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    preference:
+                      matchExpressions:
+                      - key: vsf/node-type
+                        operator: In
+                        values:
+                        - gpu
+              tolerations:
+              - key: "nvidia.com/gpu"
+                operator: "Equal"
+                value: "true"
+                effect: "NoSchedule"
+            
+            # Template for anti-affinity (spread across GPU nodes)
+            gpu-anti-affinity.yaml: |
+              affinity:
+                podAntiAffinity:
+                  preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    podAffinityTerm:
+                      labelSelector:
+                        matchExpressions:
+                        - key: app
+                          operator: Exists
+                      topologyKey: kubernetes.io/hostname
+    
+    - name: Apply GPU scheduling ConfigMap
+      command: k3s kubectl apply -f /tmp/gpu-scheduling-config.yaml
+    
+    - name: Create sample GPU workload template
+      copy:
+        dest: /tmp/sample-gpu-job.yaml
+        mode: '0644'
+        content: |
+          # Sample GPU Job - demonstrates proper affinity configuration
+          # Usage: kubectl apply -f sample-gpu-job.yaml
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: sample-gpu-job
+            namespace: {{ gpu_namespace }}
+            labels:
+              vsf/workload-type: gpu
+          spec:
+            template:
+              metadata:
+                labels:
+                  vsf/workload-type: gpu
+              spec:
+                restartPolicy: Never
+                priorityClassName: gpu-high-priority
+                
+                # GPU Node Affinity
+                affinity:
+                  nodeAffinity:
+                    requiredDuringSchedulingIgnoredDuringExecution:
+                      nodeSelectorTerms:
+                      - matchExpressions:
+                        - key: vsf/node-type
+                          operator: In
+                          values:
+                          - gpu
+                
+                # Tolerate GPU taints
+                tolerations:
+                - key: "nvidia.com/gpu"
+                  operator: "Equal"
+                  value: "true"
+                  effect: "NoSchedule"
+                
+                containers:
+                - name: gpu-workload
+                  image: busybox
+                  command: ["sh", "-c", "echo 'GPU job running on node:' && hostname && sleep 10"]
+                  resources:
+                    limits:
+                      # In mock mode, GPU resources are simulated
+                      # nvidia.com/gpu: "1"
+                      cpu: "1"
+                      memory: "2Gi"
+                    requests:
+                      cpu: "500m"
+                      memory: "1Gi"
+    
+    - name: Save sample job template
+      command: k3s kubectl apply -f /tmp/sample-gpu-job.yaml --dry-run=client -o yaml
+      register: sample_job
+      changed_when: false
+    
+    - name: Create sample job ConfigMap
+      copy:
+        dest: /tmp/sample-gpu-job-cm.yaml
+        mode: '0644'
+        content: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: sample-gpu-job-template
+            namespace: {{ gpu_namespace }}
+            labels:
+              vsf/component: templates
+          data:
+            job.yaml: |
+              {{ sample_job.stdout | indent(14) }}
+    
+    - name: Apply sample job ConfigMap
+      command: k3s kubectl apply -f /tmp/sample-gpu-job-cm.yaml
+
+
+- name: Validate GPU affinity configuration
+  hosts: control_plane[0]
+  become: true
+  vars:
+    gpu_namespace: gpu-workloads
+    
+  tasks:
+    - name: Get PriorityClasses
+      command: k3s kubectl get priorityclass -l vsf/component=scheduling
+      register: priority_classes
+      changed_when: false
+    
+    - name: Get ResourceQuota
+      command: k3s kubectl get resourcequota -n {{ gpu_namespace }}
+      register: resource_quota
+      changed_when: false
+    
+    - name: Get LimitRange
+      command: k3s kubectl get limitrange -n {{ gpu_namespace }}
+      register: limit_range
+      changed_when: false
+    
+    - name: Get ConfigMaps
+      command: k3s kubectl get configmap -n {{ gpu_namespace }}
+      register: config_maps
+      changed_when: false
+    
+    - name: Configuration summary
+      debug:
+        msg: |
+          ========================================
+          GPU Node Affinity Configuration Complete
+          ========================================
+          
+          PriorityClasses:
+          {{ priority_classes.stdout }}
+          
+          ResourceQuota ({{ gpu_namespace }}):
+          {{ resource_quota.stdout }}
+          
+          LimitRange ({{ gpu_namespace }}):
+          {{ limit_range.stdout }}
+          
+          ConfigMaps:
+          {{ config_maps.stdout }}
+          
+          GPU Nodes: {{ gpu_nodes.stdout_lines | length }}
+          
+          Usage:
+          - Use affinity templates from gpu-scheduling-templates ConfigMap
+          - Deploy GPU workloads to {{ gpu_namespace }} namespace
+          - Sample job template in sample-gpu-job-template ConfigMap
+          ========================================
