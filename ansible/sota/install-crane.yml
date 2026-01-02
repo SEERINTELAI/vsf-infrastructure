@@ -1,0 +1,119 @@
+---
+# Install Crane (Predictive Autoscaling)
+#
+# Usage: ansible-playbook -i ../inventory/vsf.yml install-crane.yml
+#
+# Crane provides:
+# - Predictive HPA (based on historical patterns)
+# - Recommendation engine for resource requests
+# - QoS-aware scheduling
+#
+# NOTE: This is a Tier 2 (optional) system.
+
+- name: Install Crane
+  hosts: k3s_control_plane[0]
+  become: true
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    crane_namespace: crane-system
+    crane_version: "v0.11.0"
+  tasks:
+    - name: Check cluster health
+      command: kubectl --kubeconfig={{ kubeconfig }} cluster-info
+      register: cluster_info
+      changed_when: false
+
+    - name: Add Crane Helm repository
+      command: helm repo add crane https://finops-open-cost-and-usage-spec.github.io/crane/charts
+      register: helm_repo
+      changed_when: "'has been added' in helm_repo.stdout"
+      failed_when: false
+
+    - name: Update Helm repositories
+      command: helm repo update
+      changed_when: false
+
+    - name: Create Crane namespace
+      command: kubectl --kubeconfig={{ kubeconfig }} create namespace {{ crane_namespace }}
+      register: ns_create
+      changed_when: "'created' in ns_create.stdout"
+      failed_when: "'already exists' not in ns_create.stderr and ns_create.rc != 0"
+
+    - name: Install Crane via Helm
+      command: >
+        helm upgrade --install crane crane/crane
+        --namespace {{ crane_namespace }}
+        --version {{ crane_version }}
+        --set craned.deploy=true
+        --set metricAdapter.deploy=true
+        --set prediction.deploy=true
+        --kubeconfig {{ kubeconfig }}
+        --wait
+        --timeout 5m
+      register: helm_install
+      changed_when: "'has been upgraded' in helm_install.stdout or 'has been installed' in helm_install.stdout"
+      failed_when: false
+
+    - name: Wait for Crane controller
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }}
+        wait --for=condition=available deployment/craned
+        --namespace {{ crane_namespace }}
+        --timeout=120s
+      register: crane_ready
+      changed_when: false
+      failed_when: false
+
+    - name: Check Crane CRDs
+      command: kubectl --kubeconfig={{ kubeconfig }} get crd effectivehorizontalpodautoscalers.autoscaling.crane.io
+      register: crd_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display Crane status
+      command: kubectl --kubeconfig={{ kubeconfig }} get pods -n {{ crane_namespace }}
+      register: pods_status
+      changed_when: false
+      failed_when: false
+
+    - name: Show Crane pods
+      debug:
+        msg: "{{ pods_status.stdout_lines | default(['Not installed']) }}"
+
+    - name: Summary
+      debug:
+        msg: |
+          
+          ============================================
+          Crane Installation (Tier 2 - Optional)
+          ============================================
+          Namespace: {{ crane_namespace }}
+          Version: {{ crane_version }}
+          
+          CRDs:
+            - EffectiveHorizontalPodAutoscaler (EHPA)
+            - RecommendationRule
+            - Analytics
+          
+          Features:
+            - Predictive HPA (based on historical patterns)
+            - Resource recommendation engine
+            - QoS-aware scheduling
+          
+          Example EHPA:
+            apiVersion: autoscaling.crane.io/v1alpha1
+            kind: EffectiveHorizontalPodAutoscaler
+            metadata:
+              name: my-ehpa
+            spec:
+              scaleTargetRef:
+                apiVersion: apps/v1
+                kind: Deployment
+                name: my-deployment
+              minReplicas: 1
+              maxReplicas: 10
+              prediction:
+                predictionWindowSeconds: 3600
+                predictionAlgorithm:
+                  algorithmType: dsp
+          ============================================

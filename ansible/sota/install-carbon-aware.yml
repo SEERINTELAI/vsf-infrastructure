@@ -1,0 +1,185 @@
+---
+# Install Carbon Aware SDK
+#
+# Usage: ansible-playbook -i ../inventory/vsf.yml install-carbon-aware.yml
+#
+# Carbon Aware SDK provides:
+# - Grid carbon intensity awareness
+# - Workload scheduling based on carbon signals
+# - Integration with WattTime, ElectricityMaps, etc.
+#
+# NOTE: This is a Tier 2 (optional) system.
+# For VSF testing, we use mock carbon signals.
+
+- name: Install Carbon Aware SDK
+  hosts: k3s_control_plane[0]
+  become: true
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    carbon_namespace: carbon-aware
+    carbon_image: ghcr.io/green-software-foundation/carbon-aware-sdk
+    carbon_version: "v1.3.0"
+  tasks:
+    - name: Check cluster health
+      command: kubectl --kubeconfig={{ kubeconfig }} cluster-info
+      register: cluster_info
+      changed_when: false
+
+    - name: Create Carbon Aware namespace
+      command: kubectl --kubeconfig={{ kubeconfig }} create namespace {{ carbon_namespace }}
+      register: ns_create
+      changed_when: "'created' in ns_create.stdout"
+      failed_when: "'already exists' not in ns_create.stderr and ns_create.rc != 0"
+
+    - name: Create mock carbon data ConfigMap
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      args:
+        stdin: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: mock-carbon-data
+            namespace: {{ carbon_namespace }}
+          data:
+            # Simulated hourly carbon intensity (gCO2/kWh)
+            # Low: 50-150, Medium: 150-350, High: 350-600
+            carbon-schedule.json: |
+              {
+                "location": "vsf-datacenter",
+                "intervals": [
+                  {"hour": 0, "intensity": 150},
+                  {"hour": 1, "intensity": 120},
+                  {"hour": 2, "intensity": 100},
+                  {"hour": 3, "intensity": 80},
+                  {"hour": 4, "intensity": 70},
+                  {"hour": 5, "intensity": 90},
+                  {"hour": 6, "intensity": 130},
+                  {"hour": 7, "intensity": 200},
+                  {"hour": 8, "intensity": 280},
+                  {"hour": 9, "intensity": 320},
+                  {"hour": 10, "intensity": 350},
+                  {"hour": 11, "intensity": 380},
+                  {"hour": 12, "intensity": 400},
+                  {"hour": 13, "intensity": 420},
+                  {"hour": 14, "intensity": 450},
+                  {"hour": 15, "intensity": 420},
+                  {"hour": 16, "intensity": 380},
+                  {"hour": 17, "intensity": 340},
+                  {"hour": 18, "intensity": 300},
+                  {"hour": 19, "intensity": 260},
+                  {"hour": 20, "intensity": 220},
+                  {"hour": 21, "intensity": 190},
+                  {"hour": 22, "intensity": 170},
+                  {"hour": 23, "intensity": 160}
+                ]
+              }
+      register: configmap_result
+      changed_when: "'created' in configmap_result.stdout or 'configured' in configmap_result.stdout"
+
+    - name: Deploy Carbon Aware SDK
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      args:
+        stdin: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: carbon-aware-sdk
+            namespace: {{ carbon_namespace }}
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: carbon-aware-sdk
+            template:
+              metadata:
+                labels:
+                  app: carbon-aware-sdk
+              spec:
+                containers:
+                - name: carbon-aware
+                  image: {{ carbon_image }}:{{ carbon_version }}
+                  ports:
+                  - containerPort: 8080
+                  env:
+                  - name: CarbonAwareVars__CarbonIntensityDataSource
+                    value: "JSON"
+                  - name: DataSources__JSON__DataFileLocation
+                    value: "/data/carbon-schedule.json"
+                  - name: DataSources__JSON__Type
+                    value: "JSON"
+                  volumeMounts:
+                  - name: carbon-data
+                    mountPath: /data
+                  resources:
+                    requests:
+                      cpu: 100m
+                      memory: 128Mi
+                    limits:
+                      cpu: 500m
+                      memory: 256Mi
+                volumes:
+                - name: carbon-data
+                  configMap:
+                    name: mock-carbon-data
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: carbon-aware-sdk
+            namespace: {{ carbon_namespace }}
+          spec:
+            selector:
+              app: carbon-aware-sdk
+            ports:
+            - port: 8080
+              targetPort: 8080
+      register: deploy_result
+      changed_when: "'created' in deploy_result.stdout or 'configured' in deploy_result.stdout"
+      failed_when: false
+
+    - name: Wait for Carbon Aware SDK
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }}
+        wait --for=condition=available deployment/carbon-aware-sdk
+        --namespace {{ carbon_namespace }}
+        --timeout=120s
+      register: sdk_ready
+      changed_when: false
+      failed_when: false
+
+    - name: Display Carbon Aware status
+      command: kubectl --kubeconfig={{ kubeconfig }} get pods -n {{ carbon_namespace }}
+      register: pods_status
+      changed_when: false
+
+    - name: Show Carbon Aware pods
+      debug:
+        msg: "{{ pods_status.stdout_lines }}"
+
+    - name: Summary
+      debug:
+        msg: |
+          
+          ============================================
+          Carbon Aware SDK Installation (Tier 2)
+          ============================================
+          Namespace: {{ carbon_namespace }}
+          Version: {{ carbon_version }}
+          
+          Data Source: Mock JSON (simulated grid data)
+          
+          Mock Carbon Schedule:
+            Low (50-150 gCO2/kWh): 0:00-5:00, 22:00-24:00
+            Medium (150-350 gCO2/kWh): 6:00-9:00, 17:00-21:00
+            High (350-600 gCO2/kWh): 10:00-16:00
+          
+          API Endpoints:
+            GET /emissions/bylocations/best
+            GET /emissions/bylocations
+            GET /emissions/forecasts/current
+          
+          Integration:
+            curl http://carbon-aware-sdk.{{ carbon_namespace }}:8080/emissions/bylocations?location=vsf-datacenter
+          ============================================
