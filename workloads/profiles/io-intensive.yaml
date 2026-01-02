@@ -1,0 +1,28 @@
+# I/O Intensive Workload Profile
+# Tests I/O-bound optimization scenarios
+
+name: io-intensive-workload
+type: deployment
+namespace: vsf-workloads
+replicas: 4
+resources:
+  requests:
+    cpu: "100m"
+    memory: "256Mi"
+  limits:
+    cpu: "300m"
+    memory: "512Mi"
+intensity: 0.5
+pattern: diurnal
+duration_seconds: 900
+image: alpine:3.18
+command:
+  - sh
+  - -c
+  - |
+    apk add --no-cache fio
+    fio --name=random-rw --ioengine=sync --rw=randrw --bs=4k --numjobs=2 --size=100M --time_based --runtime=3600 --directory=/tmp
+labels:
+  workload-type: io-intensive
+  experiment: energy-optimization
+  vsf-workload: "true"

@@ -1,0 +1,153 @@
+---
+# join-gpu-workers.yml
+# Join GPU worker nodes 1-8 to K3s cluster (Task 109)
+#
+# Usage:
+#   ansible-playbook -i inventory/vsf.yml k3s/join-gpu-workers.yml
+#
+# Prerequisites:
+#   - Standard workers joined (Tasks 107, 108)
+#   - GPU passthrough configured on VMs (F10.1)
+
+- name: Get K3s join token from control plane
+  hosts: control_plane[0]
+  become: true
+  tasks:
+    - name: Read K3s node token
+      slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: k3s_token_file
+    
+    - name: Set token fact
+      set_fact:
+        k3s_node_token: "{{ k3s_token_file.content | b64decode | trim }}"
+    
+    - name: Get control plane endpoint
+      set_fact:
+        k3s_server_url: "https://{{ ansible_host }}:6443"
+
+
+- name: Join GPU worker nodes (vsf-gpu-1 to vsf-gpu-8)
+  hosts: gpu_workers
+  become: true
+  serial: 2  # Join 2 GPU nodes at a time (GPU passthrough can be sensitive)
+  vars:
+    k3s_version: "{{ hostvars[groups['control_plane'][0]]['k3s_version'] | default('v1.29.0+k3s1') }}"
+    control_plane_host: "{{ groups['control_plane'][0] }}"
+    
+  tasks:
+    - name: Get token from control plane
+      set_fact:
+        k3s_token: "{{ hostvars[control_plane_host]['k3s_node_token'] }}"
+        k3s_url: "{{ hostvars[control_plane_host]['k3s_server_url'] }}"
+    
+    - name: Check if K3s is already installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+    
+    - name: Verify GPU is accessible (pre-flight check)
+      command: nvidia-smi --query-gpu=name --format=csv,noheader
+      register: gpu_check
+      failed_when: false
+      changed_when: false
+    
+    - name: Display GPU status
+      debug:
+        msg: "GPU detected: {{ gpu_check.stdout | default('No GPU found - mock mode will be used') }}"
+    
+    - name: Install K3s agent on GPU node
+      when: not k3s_binary.stat.exists
+      shell: |
+        curl -sfL https://get.k3s.io | \
+          INSTALL_K3S_VERSION="{{ k3s_version }}" \
+          K3S_URL="{{ k3s_url }}" \
+          K3S_TOKEN="{{ k3s_token }}" \
+          sh -s - agent
+      args:
+        creates: /usr/local/bin/k3s
+    
+    - name: Wait for k3s-agent service to start
+      systemd:
+        name: k3s-agent
+        state: started
+        enabled: true
+    
+    - name: Wait for node to be registered
+      delegate_to: "{{ control_plane_host }}"
+      command: k3s kubectl get node {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      register: node_ready
+      until: node_ready.stdout == "True"
+      retries: 30
+      delay: 10
+      changed_when: false
+    
+    - name: Apply GPU node labels
+      delegate_to: "{{ control_plane_host }}"
+      command: "k3s kubectl label node {{ inventory_hostname }} {{ item }} --overwrite"
+      loop: "{{ node_labels | default([]) }}"
+      changed_when: true
+    
+    - name: Apply GPU taints (NoSchedule unless GPU workload)
+      delegate_to: "{{ control_plane_host }}"
+      command: "k3s kubectl taint node {{ inventory_hostname }} {{ item }} --overwrite"
+      loop: "{{ node_taints | default([]) }}"
+      changed_when: true
+      when: node_taints is defined
+
+
+- name: Validate GPU workers join
+  hosts: control_plane[0]
+  become: true
+  tasks:
+    - name: Get GPU nodes
+      shell: k3s kubectl get nodes -l vsf/node-type=gpu --no-headers
+      register: gpu_nodes
+      changed_when: false
+    
+    - name: Display GPU workers status
+      debug:
+        msg: |
+          ========================================
+          GPU Workers Joined (Task 109)
+          ========================================
+          {{ gpu_nodes.stdout }}
+          ========================================
+    
+    - name: Verify 8 GPU nodes joined
+      shell: k3s kubectl get nodes -l vsf/node-type=gpu --no-headers | wc -l
+      register: gpu_count
+      failed_when: gpu_count.stdout | int < 8
+      changed_when: false
+    
+    - name: Check GPU taints applied
+      shell: k3s kubectl get nodes -l vsf/node-type=gpu -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.taints[*].key}{"\n"}{end}'
+      register: gpu_taints
+      changed_when: false
+    
+    - name: Display GPU taints
+      debug:
+        msg: |
+          GPU Node Taints:
+          {{ gpu_taints.stdout }}
+    
+    - name: Final cluster summary
+      shell: |
+        echo "=== CLUSTER SUMMARY ==="
+        echo ""
+        echo "Control Plane:"
+        k3s kubectl get nodes -l vsf/node-type=control-plane --no-headers 2>/dev/null || echo "  (labels not yet applied)"
+        echo ""
+        echo "Standard Workers:"
+        k3s kubectl get nodes -l vsf/node-type=standard --no-headers
+        echo ""
+        echo "GPU Workers:"
+        k3s kubectl get nodes -l vsf/node-type=gpu --no-headers
+        echo ""
+        echo "Total Nodes: $(k3s kubectl get nodes --no-headers | wc -l)"
+      register: cluster_summary
+      changed_when: false
+    
+    - name: Display final summary
+      debug:
+        msg: "{{ cluster_summary.stdout_lines }}"

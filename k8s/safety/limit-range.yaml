@@ -1,0 +1,56 @@
+---
+# VSF Workload Safety LimitRange
+#
+# PRIORITY 0: Caps individual pod/container resources.
+#
+# Per-Container Limits:
+#   CPU: max 2 cores
+#   Memory: max 4Gi
+#   GPU: max 1
+#
+# Per-Pod Limits:
+#   CPU: max 4 cores
+#   Memory: max 8Gi
+#
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: vsf-workload-limits
+  namespace: vsf-workloads
+  labels:
+    app.kubernetes.io/name: vsf-safety
+    app.kubernetes.io/part-of: vsf
+    priority: "0"
+spec:
+  limits:
+    # Pod-level limits
+    - type: Pod
+      max:
+        cpu: "4"
+        memory: "8Gi"
+      min:
+        cpu: "50m"
+        memory: "64Mi"
+    
+    # Container-level limits
+    - type: Container
+      max:
+        cpu: "2"
+        memory: "4Gi"
+        nvidia.com/gpu: "1"
+      min:
+        cpu: "50m"
+        memory: "64Mi"
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "128Mi"
+    
+    # PVC limits
+    - type: PersistentVolumeClaim
+      max:
+        storage: "50Gi"
+      min:
+        storage: "1Gi"

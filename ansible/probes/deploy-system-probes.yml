@@ -1,0 +1,173 @@
+---
+# Deploy System Probe to all VSF VMs
+# Usage: ansible-playbook -i ../inventory/vsf.yml deploy-system-probes.yml
+
+- name: Package System Probe
+  hosts: localhost
+  gather_facts: false
+  vars:
+    zdc_path: "{{ lookup('env', 'HOME') }}/ASIT/repos/Zon-data-center"
+    package_dir: "{{ playbook_dir }}/dist"
+  tasks:
+    - name: Create dist directory
+      file:
+        path: "{{ package_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Run packaging script
+      shell: |
+        bash {{ playbook_dir }}/package-system-probe.sh
+      environment:
+        ZDC_PATH: "{{ zdc_path }}"
+        OUTPUT_DIR: "{{ package_dir }}"
+      register: package_result
+      changed_when: true
+
+    - name: Display package result
+      debug:
+        msg: "{{ package_result.stdout_lines[-5:] }}"
+
+    - name: Find package file
+      find:
+        paths: "{{ package_dir }}"
+        patterns: "system-probe-vm-*.tar.gz"
+      register: package_files
+
+    - name: Set package path fact
+      set_fact:
+        probe_package: "{{ package_files.files | sort(attribute='mtime') | last }}"
+      when: package_files.files | length > 0
+
+- name: Deploy System Probe to all VMs
+  hosts: all:!localhost
+  become: true
+  vars:
+    probe_install_dir: /opt/system-probe
+    probe_user: probe
+    probe_port: 8765
+    package_dir: "{{ hostvars['localhost']['playbook_dir'] }}/dist"
+  tasks:
+    - name: Install Python dependencies
+      package:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+        state: present
+
+    - name: Create probe user
+      user:
+        name: "{{ probe_user }}"
+        system: true
+        shell: /bin/false
+        home: "{{ probe_install_dir }}"
+        create_home: false
+
+    - name: Create install directory
+      file:
+        path: "{{ probe_install_dir }}"
+        state: directory
+        owner: "{{ probe_user }}"
+        group: "{{ probe_user }}"
+        mode: '0755'
+
+    - name: Copy probe package
+      copy:
+        src: "{{ hostvars['localhost']['probe_package']['path'] }}"
+        dest: "/tmp/system-probe.tar.gz"
+        mode: '0644'
+
+    - name: Extract probe package
+      unarchive:
+        src: "/tmp/system-probe.tar.gz"
+        dest: "/tmp/"
+        remote_src: true
+
+    - name: Find extracted directory
+      find:
+        paths: /tmp
+        patterns: "system-probe-vm-*"
+        file_type: directory
+      register: extracted_dirs
+
+    - name: Copy probe files to install directory
+      shell: |
+        cp -r /tmp/{{ extracted_dirs.files[0].path | basename }}/* {{ probe_install_dir }}/
+      when: extracted_dirs.files | length > 0
+      changed_when: true
+
+    - name: Create hostname.secret
+      copy:
+        content: "{{ inventory_hostname }}"
+        dest: "{{ probe_install_dir }}/hostname.secret"
+        owner: "{{ probe_user }}"
+        group: "{{ probe_user }}"
+        mode: '0644'
+
+    - name: Create config.env
+      copy:
+        content: |
+          # VM System Probe Configuration
+          PROBE_HOSTNAME={{ inventory_hostname }}
+          MCP_PORT={{ probe_port }}
+          DISABLE_GPU=true
+          DISABLE_RAPL=true
+        dest: "{{ probe_install_dir }}/config.env"
+        owner: "{{ probe_user }}"
+        group: "{{ probe_user }}"
+        mode: '0644'
+
+    - name: Create virtual environment
+      command: python3 -m venv {{ probe_install_dir }}/venv
+      args:
+        creates: "{{ probe_install_dir }}/venv"
+      become_user: "{{ probe_user }}"
+
+    - name: Install Python requirements
+      pip:
+        requirements: "{{ probe_install_dir }}/requirements.txt"
+        virtualenv: "{{ probe_install_dir }}/venv"
+      become_user: "{{ probe_user }}"
+
+    - name: Set ownership
+      file:
+        path: "{{ probe_install_dir }}"
+        owner: "{{ probe_user }}"
+        group: "{{ probe_user }}"
+        recurse: true
+
+    - name: Install systemd service
+      template:
+        src: system-probe.service.j2
+        dest: /etc/systemd/system/system-probe.service
+        mode: '0644'
+      notify: Reload systemd
+
+    - name: Enable and start system-probe service
+      systemd:
+        name: system-probe
+        enabled: true
+        state: started
+      register: service_start
+
+    - name: Wait for probe to be ready
+      wait_for:
+        port: "{{ probe_port }}"
+        host: "127.0.0.1"
+        timeout: 30
+      when: service_start.changed
+
+    - name: Cleanup temp files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/system-probe.tar.gz
+        - "/tmp/{{ extracted_dirs.files[0].path | basename }}"
+      when: extracted_dirs.files | length > 0
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true

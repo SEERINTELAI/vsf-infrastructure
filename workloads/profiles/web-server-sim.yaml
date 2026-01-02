@@ -1,0 +1,40 @@
+# Web Server Simulation Profile
+# Simulates web server workload with variable request rate
+
+name: web-server-simulation
+type: deployment
+namespace: vsf-workloads
+replicas: 5
+resources:
+  requests:
+    cpu: "100m"
+    memory: "64Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+intensity: 0.5
+pattern: diurnal
+duration_seconds: 900
+image: python:3.11-alpine
+command:
+  - python
+  - -c
+  - |
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import random, time, threading
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            # Simulate variable processing time
+            time.sleep(random.uniform(0.01, 0.1))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+    server = HTTPServer(("0.0.0.0", 8080), Handler)
+    print("Starting server on :8080")
+    server.serve_forever()
+labels:
+  workload-type: web-server
+  experiment: energy-optimization
+  vsf-workload: "true"

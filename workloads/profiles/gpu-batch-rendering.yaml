@@ -1,0 +1,44 @@
+# GPU Batch Rendering Workload Profile
+# Simulates graphics/video rendering batch job
+
+name: gpu-batch-rendering
+type: job
+namespace: vsf-workloads
+parallelism: 4
+completions: 8
+resources:
+  requests:
+    cpu: "1"
+    memory: "4Gi"
+    nvidia.com/gpu: "1"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+    nvidia.com/gpu: "1"
+intensity: 0.8
+pattern: batch-gpu
+duration_seconds: 900
+image: nvcr.io/nvidia/cuda:12.0-base
+command:
+  - sh
+  - -c
+  - |
+    echo "Starting batch rendering job"
+    nvidia-smi || echo "Mock mode - no real GPU"
+    # Simulate render frames
+    for frame in $(seq 1 100); do
+      echo "Rendering frame $frame/100"
+      sleep 5
+    done
+    echo "Rendering complete"
+node_selector:
+  gpu: "true"
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+labels:
+  workload-type: gpu-rendering
+  experiment: energy-optimization
+  gpu-workload: "true"
+  vsf-workload: "true"

@@ -1,0 +1,229 @@
+---
+# install-calico.yml
+# Install Calico CNI on K3s cluster
+#
+# Usage:
+#   ansible-playbook -i inventory/vsf.yml k3s/install-calico.yml
+#
+# Prerequisites:
+#   - K3s control plane deployed (Task 105)
+#   - K3s started with --flannel-backend=none
+#
+# This playbook:
+#   1. Installs Tigera operator
+#   2. Configures Calico with VXLAN backend
+#   3. Sets up IPPool for pod networking
+#   4. Enables Prometheus metrics
+#   5. Validates CNI is working
+
+- name: Install Calico CNI
+  hosts: control_plane[0]
+  become: true
+  vars:
+    calico_version: "v3.27.0"
+    calico_operator_version: "v1.32.3"
+    pod_cidr: "{{ cluster_cidr | default('10.42.0.0/16') }}"
+    calico_backend: "vxlan"  # Options: vxlan, bird (BGP), none
+    enable_prometheus: true
+    
+  tasks:
+    - name: Check K3s is running
+      command: k3s kubectl cluster-info
+      register: cluster_info
+      changed_when: false
+      failed_when: cluster_info.rc != 0
+    
+    - name: Create calico-system namespace
+      command: k3s kubectl create namespace calico-system --dry-run=client -o yaml
+      register: ns_yaml
+      changed_when: false
+    
+    - name: Apply calico-system namespace
+      command: k3s kubectl apply -f -
+      args:
+        stdin: "{{ ns_yaml.stdout }}"
+      changed_when: true
+    
+    - name: Check if Tigera operator is already installed
+      command: k3s kubectl get deployment -n tigera-operator tigera-operator
+      register: operator_check
+      failed_when: false
+      changed_when: false
+    
+    - name: Install Tigera operator
+      when: operator_check.rc != 0
+      block:
+        - name: Download Tigera operator manifest
+          get_url:
+            url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/tigera-operator.yaml"
+            dest: /tmp/tigera-operator.yaml
+            mode: '0644'
+        
+        - name: Apply Tigera operator
+          command: k3s kubectl apply -f /tmp/tigera-operator.yaml
+          register: operator_apply
+        
+        - name: Wait for Tigera operator to be ready
+          command: >
+            k3s kubectl wait --for=condition=available 
+            --timeout=120s deployment/tigera-operator -n tigera-operator
+          retries: 3
+          delay: 10
+    
+    - name: Create Calico Installation CR
+      copy:
+        dest: /tmp/calico-installation.yaml
+        mode: '0644'
+        content: |
+          apiVersion: operator.tigera.io/v1
+          kind: Installation
+          metadata:
+            name: default
+          spec:
+            # Calico networking backend
+            calicoNetwork:
+              bgp: Disabled
+              ipPools:
+              - blockSize: 26
+                cidr: {{ pod_cidr }}
+                encapsulation: VXLAN
+                natOutgoing: Enabled
+                nodeSelector: all()
+              nodeAddressAutodetectionV4:
+                firstFound: true
+            # Container IP forwarding
+            containerIPForwarding: Enabled
+            # Registry (use default)
+            registry: quay.io
+            # Variant
+            variant: Calico
+    
+    - name: Apply Calico Installation
+      command: k3s kubectl apply -f /tmp/calico-installation.yaml
+      register: installation_apply
+    
+    - name: Wait for Calico to be ready
+      command: >
+        k3s kubectl wait --for=condition=Available 
+        --timeout=300s tigerastatus/calico
+      retries: 5
+      delay: 30
+      register: calico_ready
+      until: calico_ready.rc == 0
+    
+    - name: Create APIServer CR for Prometheus metrics
+      when: enable_prometheus
+      copy:
+        dest: /tmp/calico-apiserver.yaml
+        mode: '0644'
+        content: |
+          apiVersion: operator.tigera.io/v1
+          kind: APIServer
+          metadata:
+            name: default
+          spec: {}
+    
+    - name: Apply APIServer CR
+      when: enable_prometheus
+      command: k3s kubectl apply -f /tmp/calico-apiserver.yaml
+      register: apiserver_apply
+      ignore_errors: true  # May not be needed in all setups
+    
+    - name: Create basic network policy for kube-system
+      copy:
+        dest: /tmp/kube-system-netpol.yaml
+        mode: '0644'
+        content: |
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-kube-system
+            namespace: kube-system
+          spec:
+            podSelector: {}
+            policyTypes:
+            - Ingress
+            - Egress
+            ingress:
+            - {}  # Allow all ingress to kube-system
+            egress:
+            - {}  # Allow all egress from kube-system
+    
+    - name: Apply kube-system network policy
+      command: k3s kubectl apply -f /tmp/kube-system-netpol.yaml
+      register: netpol_apply
+
+
+- name: Validate Calico installation
+  hosts: control_plane[0]
+  become: true
+  tasks:
+    - name: Get Calico pods
+      command: k3s kubectl get pods -n calico-system -o wide
+      register: calico_pods
+      changed_when: false
+    
+    - name: Display Calico pods
+      debug:
+        msg: "{{ calico_pods.stdout_lines }}"
+    
+    - name: Check all Calico pods are running
+      command: >
+        k3s kubectl get pods -n calico-system 
+        -o jsonpath='{.items[*].status.phase}'
+      register: pod_phases
+      failed_when: "'Pending' in pod_phases.stdout or 'Failed' in pod_phases.stdout"
+      changed_when: false
+    
+    - name: Get IPPool configuration
+      command: k3s kubectl get ippools -o yaml
+      register: ippools
+      changed_when: false
+    
+    - name: Display IPPool
+      debug:
+        msg: "{{ ippools.stdout_lines }}"
+    
+    - name: Test pod networking with a test pod
+      block:
+        - name: Create test pod
+          command: >
+            k3s kubectl run calico-test --image=busybox 
+            --restart=Never --rm -i --timeout=60s
+            -- wget -qO- --timeout=5 kubernetes.default.svc.cluster.local
+          register: test_pod
+          failed_when: false
+          changed_when: false
+        
+        - name: Check test result
+          debug:
+            msg: "Pod networking test: {{ 'PASSED' if test_pod.rc == 0 else 'FAILED (may need workers)' }}"
+      ignore_errors: true  # May fail without workers
+    
+    - name: Get node networking status
+      command: k3s kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}'
+      register: node_ips
+      changed_when: false
+    
+    - name: Display node IPs
+      debug:
+        msg: "{{ node_ips.stdout_lines }}"
+    
+    - name: Final Calico status summary
+      debug:
+        msg: |
+          ========================================
+          Calico CNI Installation Complete
+          ========================================
+          Version: {{ calico_version }}
+          Backend: VXLAN
+          Pod CIDR: {{ pod_cidr }}
+          Prometheus: {{ 'Enabled' if enable_prometheus else 'Disabled' }}
+          
+          Calico Pods:
+          {{ calico_pods.stdout }}
+          
+          Next Steps:
+          1. Join worker nodes: ansible-playbook k3s/join-workers.yml
+          2. Verify pod-to-pod networking after workers join
+          ========================================

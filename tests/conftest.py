@@ -8,6 +8,66 @@ import pytest
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# Pytest Marker Registration
+# =============================================================================
+
+def pytest_configure(config):
+    """Register custom pytest markers."""
+    # General categories
+    config.addinivalue_line("markers", "infrastructure: Infrastructure validation tests")
+    config.addinivalue_line("markers", "kubernetes: Kubernetes cluster tests")
+    config.addinivalue_line("markers", "monitoring: Monitoring stack tests")
+    config.addinivalue_line("markers", "integration: Integration tests (may modify state)")
+    
+    # Kubernetes pre-mortem categories (DP:ETG)
+    config.addinivalue_line("markers", "bootstrap: Cluster initialization/bootstrap failure tests")
+    config.addinivalue_line("markers", "ha: High availability / quorum failure tests")
+    config.addinivalue_line("markers", "network: CNI / DNS / connectivity failure tests")
+    config.addinivalue_line("markers", "scheduling: Pod scheduling failure tests")
+    config.addinivalue_line("markers", "gpu: GPU isolation / device plugin failure tests")
+    config.addinivalue_line("markers", "resource: Resource exhaustion / eviction tests")
+    
+    # Monitoring pre-mortem categories (DP:ETG)
+    config.addinivalue_line("markers", "service_availability: Service availability tests")
+    config.addinivalue_line("markers", "metrics_collection: Metrics collection tests")
+    config.addinivalue_line("markers", "data_integrity: Data integrity tests")
+    config.addinivalue_line("markers", "alerting: Alerting configuration tests")
+    config.addinivalue_line("markers", "dashboard: Dashboard configuration tests")
+    config.addinivalue_line("markers", "resource_exhaustion: Resource exhaustion tests")
+    
+    # Component-specific markers
+    config.addinivalue_line("markers", "gpu_metrics: GPU metrics tests")
+    config.addinivalue_line("markers", "power_metrics: Power metrics tests")
+    
+    # K8s Probe pre-mortem categories (DP:ETG)
+    config.addinivalue_line("markers", "k8s_probe: K8s Probe MCP tests")
+    config.addinivalue_line("markers", "connection: MCP connection failure tests")
+    config.addinivalue_line("markers", "node_control: Node cordon/drain tests")
+    config.addinivalue_line("markers", "workload: Pod scheduling/consolidation tests")
+    config.addinivalue_line("markers", "metrics: Cluster metrics tests")
+    config.addinivalue_line("markers", "permission: RBAC/permission tests")
+    config.addinivalue_line("markers", "state: State consistency tests")
+    
+    # Hardware Safety tests (PRIORITY 0)
+    config.addinivalue_line("markers", "safety: Hardware safety tests (PRIORITY 0)")
+    
+    # Workload Generation tests (F10.5 Track A)
+    config.addinivalue_line("markers", "workload_gen: Workload generation tests")
+    
+    # Experiment Framework tests (F10.5 Track B)
+    config.addinivalue_line("markers", "experiment: Experiment framework tests")
+    
+    # Analysis & Reporting tests (F10.5 Track C)
+    config.addinivalue_line("markers", "analysis: Analysis and reporting tests")
+    
+    # SOTA Integration tests (F10.3)
+    config.addinivalue_line("markers", "sota: SOTA system integration tests")
+    config.addinivalue_line("markers", "keda: KEDA-specific tests")
+    config.addinivalue_line("markers", "intel_pm: Intel Power Manager tests")
+    config.addinivalue_line("markers", "kube_green: Kube-green tests")
+
 @pytest.fixture
 def project_root() -> Path:
     return Path(__file__).parent.parent

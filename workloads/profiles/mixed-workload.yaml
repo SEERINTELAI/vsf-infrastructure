@@ -1,0 +1,29 @@
+# Mixed Workload Profile
+# Simulates realistic multi-component application
+
+name: mixed-realistic-workload
+type: deployment
+namespace: vsf-workloads
+replicas: 10
+resources:
+  requests:
+    cpu: "250m"
+    memory: "384Mi"
+  limits:
+    cpu: "750m"
+    memory: "1Gi"
+intensity: 0.55
+pattern: mixed
+duration_seconds: 1200
+image: alpine:3.18
+command:
+  - sh
+  - -c
+  - |
+    apk add --no-cache stress-ng
+    # Mix of CPU, memory, and I/O workload
+    stress-ng --cpu 1 --vm 1 --vm-bytes 30% --hdd 1 --timeout 0
+labels:
+  workload-type: mixed
+  experiment: energy-optimization
+  vsf-workload: "true"

@@ -1,0 +1,45 @@
+# GPU Mixed Utilization Workload Profile
+# Simulates varying GPU workload (bursty pattern)
+
+name: gpu-mixed-utilization
+type: deployment
+namespace: vsf-workloads
+replicas: 3
+resources:
+  requests:
+    cpu: "200m"
+    memory: "1Gi"
+    nvidia.com/gpu: "1"
+  limits:
+    cpu: "1"
+    memory: "2Gi"
+    nvidia.com/gpu: "1"
+intensity: 0.7
+pattern: bursty
+duration_seconds: 600
+image: nvcr.io/nvidia/cuda:12.0-base
+command:
+  - sh
+  - -c
+  - |
+    echo "Starting mixed GPU workload"
+    nvidia-smi || echo "Mock mode - no real GPU"
+    while true; do
+      # Simulate burst of GPU activity
+      echo "GPU burst - high utilization"
+      sleep 20
+      # Simulate idle period
+      echo "GPU idle - low utilization"
+      sleep 10
+    done
+node_selector:
+  gpu: "true"
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+labels:
+  workload-type: gpu-mixed
+  experiment: energy-optimization
+  gpu-workload: "true"
+  vsf-workload: "true"

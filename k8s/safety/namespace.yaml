@@ -1,0 +1,11 @@
+---
+# VSF Workloads Namespace
+# All generated workloads MUST run in this namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vsf-workloads
+  labels:
+    app.kubernetes.io/name: vsf-workloads
+    app.kubernetes.io/part-of: vsf
+    vsf-safety: enabled

@@ -1,0 +1,247 @@
+---
+# Configure SOTA Systems Integration
+#
+# Usage: ansible-playbook -i ../inventory/vsf.yml configure-integration.yml
+#
+# This playbook:
+# 1. Creates shared namespace for integration tests
+# 2. Configures Prometheus scraping for all SOTA systems
+# 3. Sets up ServiceMonitors
+# 4. Creates test workloads with SOTA annotations
+
+- name: Configure SOTA Integration
+  hosts: k3s_control_plane[0]
+  become: true
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    vsf_namespace: vsf-workloads
+    prometheus_namespace: monitoring
+  tasks:
+    - name: Create VSF workloads namespace
+      command: kubectl --kubeconfig={{ kubeconfig }} create namespace {{ vsf_namespace }}
+      register: ns_create
+      changed_when: "'created' in ns_create.stdout"
+      failed_when: "'already exists' not in ns_create.stderr and ns_create.rc != 0"
+
+    - name: Label namespace for Kube-green
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} label namespace {{ vsf_namespace }}
+        kube-green.com/enabled=true --overwrite
+      register: label_result
+      changed_when: "'labeled' in label_result.stdout"
+
+    - name: Create ServiceMonitor for KEDA
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      args:
+        stdin: |
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: keda-monitor
+            namespace: {{ prometheus_namespace }}
+            labels:
+              release: prometheus
+          spec:
+            namespaceSelector:
+              matchNames:
+              - keda
+            selector:
+              matchLabels:
+                app: keda-operator
+            endpoints:
+            - port: metrics
+              interval: 30s
+      register: sm_keda
+      changed_when: "'created' in sm_keda.stdout or 'configured' in sm_keda.stdout"
+      failed_when: false
+
+    - name: Create ServiceMonitor for Carbon Aware SDK
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      args:
+        stdin: |
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: carbon-aware-monitor
+            namespace: {{ prometheus_namespace }}
+            labels:
+              release: prometheus
+          spec:
+            namespaceSelector:
+              matchNames:
+              - carbon-aware
+            selector:
+              matchLabels:
+                app: carbon-aware-sdk
+            endpoints:
+            - port: "8080"
+              path: /metrics
+              interval: 60s
+      register: sm_carbon
+      changed_when: "'created' in sm_carbon.stdout or 'configured' in sm_carbon.stdout"
+      failed_when: false
+
+    - name: Create test deployment with SOTA annotations
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      args:
+        stdin: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: sota-test-workload
+            namespace: {{ vsf_namespace }}
+            annotations:
+              keda.sh/enabled: "true"
+              kube-green.com/include: "true"
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: sota-test
+            template:
+              metadata:
+                labels:
+                  app: sota-test
+              spec:
+                containers:
+                - name: stress
+                  image: progrium/stress:latest
+                  args:
+                  - --cpu
+                  - "1"
+                  - --timeout
+                  - "3600s"
+                  resources:
+                    requests:
+                      cpu: 100m
+                      memory: 128Mi
+                    limits:
+                      cpu: 500m
+                      memory: 256Mi
+      register: deploy_test
+      changed_when: "'created' in deploy_test.stdout or 'configured' in deploy_test.stdout"
+
+    - name: Create KEDA ScaledObject for test workload
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      args:
+        stdin: |
+          apiVersion: keda.sh/v1alpha1
+          kind: ScaledObject
+          metadata:
+            name: sota-test-scaler
+            namespace: {{ vsf_namespace }}
+          spec:
+            scaleTargetRef:
+              name: sota-test-workload
+            minReplicaCount: 1
+            maxReplicaCount: 5
+            pollingInterval: 30
+            cooldownPeriod: 300
+            triggers:
+            - type: cpu
+              metadata:
+                type: Utilization
+                value: "60"
+      register: so_create
+      changed_when: "'created' in so_create.stdout or 'configured' in so_create.stdout"
+      failed_when: false
+
+    - name: Create Kube-green SleepInfo for workloads
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      args:
+        stdin: |
+          apiVersion: kube-green.com/v1alpha1
+          kind: SleepInfo
+          metadata:
+            name: workloads-nightly
+            namespace: {{ vsf_namespace }}
+          spec:
+            weekdays: "1-5"
+            sleepAt: "22:00"
+            wakeUpAt: "06:00"
+            timeZone: "UTC"
+            suspendCronJobs: true
+            excludeRef:
+            - apiVersion: apps/v1
+              kind: Deployment
+              name: critical-service
+      register: si_create
+      changed_when: "'created' in si_create.stdout or 'configured' in si_create.stdout"
+      failed_when: false
+
+    - name: Create Prometheus rules for SOTA metrics
+      command: >
+        kubectl --kubeconfig={{ kubeconfig }} apply -f -
+      args:
+        stdin: |
+          apiVersion: monitoring.coreos.com/v1
+          kind: PrometheusRule
+          metadata:
+            name: sota-rules
+            namespace: {{ prometheus_namespace }}
+            labels:
+              release: prometheus
+          spec:
+            groups:
+            - name: sota.rules
+              rules:
+              - record: sota:keda:active_scalers
+                expr: sum(keda_scaler_active) or vector(0)
+              - record: sota:keda:scaled_objects
+                expr: count(keda_scaled_object_paused{paused="false"}) or vector(0)
+              - record: sota:kubegreen:suspended_pods
+                expr: count(kube_pod_status_phase{phase="Succeeded"} * on(namespace) group_left() kube_namespace_labels{label_kube_green_com_enabled="true"}) or vector(0)
+            - name: sota.alerts
+              rules:
+              - alert: KedaScalerError
+                expr: increase(keda_scaler_errors_total[5m]) > 0
+                for: 5m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "KEDA scaler errors detected"
+      register: prom_rules
+      changed_when: "'created' in prom_rules.stdout or 'configured' in prom_rules.stdout"
+      failed_when: false
+
+    - name: Verify integration setup
+      command: kubectl --kubeconfig={{ kubeconfig }} get pods -n {{ vsf_namespace }}
+      register: pods_status
+      changed_when: false
+
+    - name: Show VSF workload pods
+      debug:
+        msg: "{{ pods_status.stdout_lines }}"
+
+    - name: Summary
+      debug:
+        msg: |
+          
+          ============================================
+          SOTA Integration Configured
+          ============================================
+          Namespace: {{ vsf_namespace }}
+          
+          Resources Created:
+            - Test deployment with SOTA annotations
+            - KEDA ScaledObject (CPU-based scaling)
+            - Kube-green SleepInfo (nightly suspension)
+            - ServiceMonitors for Prometheus
+            - PrometheusRules for SOTA metrics
+          
+          Integration Points:
+            - KEDA → Prometheus (metrics trigger)
+            - Kube-green → Namespace labels
+            - Carbon Aware → HTTP API
+          
+          Next Steps:
+            1. Run baseline experiments
+            2. Enable each SOTA system
+            3. Measure power reduction
+            4. Compare to AgentOne
+          ============================================

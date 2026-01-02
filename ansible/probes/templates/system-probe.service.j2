@@ -1,0 +1,27 @@
+[Unit]
+Description=System Probe MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User={{ probe_user }}
+Group={{ probe_user }}
+WorkingDirectory={{ probe_install_dir }}
+ExecStart={{ probe_install_dir }}/venv/bin/python3 -m mcp_server.zon_mcp_server --port {{ probe_port }}
+Restart=always
+RestartSec=10
+
+# Environment
+Environment=DISABLE_GPU=true
+Environment=DISABLE_RAPL=true
+Environment=PYTHONPATH={{ probe_install_dir }}
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths={{ probe_install_dir }}/logs
+
+[Install]
+WantedBy=multi-user.target

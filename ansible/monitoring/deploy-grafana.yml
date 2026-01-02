@@ -1,0 +1,421 @@
+---
+# deploy-grafana.yml
+# Deploy Grafana with VSF dashboards (Task 117)
+#
+# Usage:
+#   ansible-playbook -i inventory/vsf.yml monitoring/deploy-grafana.yml
+#
+# This deploys:
+#   - Grafana server
+#   - Prometheus datasource
+#   - GPU monitoring dashboard
+#   - Power monitoring dashboard
+#   - Cluster overview dashboard
+
+- name: Deploy Grafana with Dashboards
+  hosts: control_plane[0]
+  become: true
+  vars:
+    helm_repo_name: grafana
+    helm_repo_url: https://grafana.github.io/helm-charts
+    release_name: grafana
+    namespace: monitoring
+    
+    # Grafana configuration
+    admin_user: admin
+    admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') | default('vsf-admin-changeme', true) }}"
+    
+  tasks:
+    - name: Ensure Helm is installed
+      command: helm version --short
+      register: helm_check
+      changed_when: false
+      failed_when: helm_check.rc != 0
+    
+    - name: Add Grafana Helm repository
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      command: helm repo add {{ helm_repo_name }} {{ helm_repo_url }}
+      register: repo_add
+      changed_when: "'has been added' in repo_add.stdout"
+      failed_when: false
+    
+    - name: Update Helm repositories
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      command: helm repo update
+      changed_when: false
+    
+    - name: Create Grafana values file
+      copy:
+        dest: /tmp/grafana-values.yaml
+        mode: '0644'
+        content: |
+          # Grafana values for VSF
+          
+          adminUser: {{ admin_user }}
+          adminPassword: {{ admin_password }}
+          
+          # Persistence
+          persistence:
+            enabled: true
+            size: 10Gi
+          
+          # Resources
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          
+          # Datasources
+          datasources:
+            datasources.yaml:
+              apiVersion: 1
+              datasources:
+                - name: Prometheus
+                  type: prometheus
+                  url: http://prometheus-prometheus.monitoring.svc.cluster.local:9090
+                  access: proxy
+                  isDefault: true
+                  editable: false
+          
+          # Dashboard providers
+          dashboardProviders:
+            dashboardproviders.yaml:
+              apiVersion: 1
+              providers:
+                - name: 'vsf-dashboards'
+                  orgId: 1
+                  folder: 'VSF'
+                  type: file
+                  disableDeletion: false
+                  editable: true
+                  options:
+                    path: /var/lib/grafana/dashboards/vsf
+          
+          # Dashboard ConfigMaps
+          dashboardsConfigMaps:
+            vsf: "grafana-dashboards-vsf"
+          
+          # Grafana.ini settings
+          grafana.ini:
+            server:
+              root_url: "%(protocol)s://%(domain)s/"
+            auth.anonymous:
+              enabled: true
+              org_role: Viewer
+    
+    - name: Deploy Grafana
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      command: >
+        helm upgrade --install {{ release_name }}
+        {{ helm_repo_name }}/grafana
+        --namespace {{ namespace }}
+        --values /tmp/grafana-values.yaml
+        --wait
+        --timeout 5m
+      register: helm_install
+    
+    - name: Display Helm output
+      debug:
+        msg: "{{ helm_install.stdout_lines }}"
+
+
+- name: Create VSF Dashboards ConfigMap
+  hosts: control_plane[0]
+  become: true
+  vars:
+    namespace: monitoring
+    
+  tasks:
+    - name: Create dashboards ConfigMap
+      copy:
+        dest: /tmp/grafana-dashboards-cm.yaml
+        mode: '0644'
+        content: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: grafana-dashboards-vsf
+            namespace: {{ namespace }}
+            labels:
+              grafana_dashboard: "1"
+          data:
+            gpu-overview.json: |
+              {
+                "annotations": {"list": []},
+                "editable": true,
+                "fiscalYearStartMonth": 0,
+                "graphTooltip": 0,
+                "id": null,
+                "links": [],
+                "panels": [
+                  {
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "fieldConfig": {
+                      "defaults": {
+                        "color": {"mode": "palette-classic"},
+                        "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+                        "mappings": [],
+                        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 80}]},
+                        "unit": "percent"
+                      },
+                      "overrides": []
+                    },
+                    "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+                    "id": 1,
+                    "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+                    "pluginVersion": "10.0.0",
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "DCGM_FI_DEV_GPU_UTIL", "legendFormat": "{{Hostname}} GPU {{gpu}}", "refId": "A"}],
+                    "title": "GPU Utilization",
+                    "type": "timeseries"
+                  },
+                  {
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "fieldConfig": {
+                      "defaults": {
+                        "color": {"mode": "palette-classic"},
+                        "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+                        "mappings": [],
+                        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 80}]},
+                        "unit": "watt"
+                      },
+                      "overrides": []
+                    },
+                    "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+                    "id": 2,
+                    "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+                    "pluginVersion": "10.0.0",
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "DCGM_FI_DEV_POWER_USAGE", "legendFormat": "{{Hostname}} GPU {{gpu}}", "refId": "A"}],
+                    "title": "GPU Power Draw",
+                    "type": "timeseries"
+                  },
+                  {
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "fieldConfig": {
+                      "defaults": {
+                        "color": {"mode": "palette-classic"},
+                        "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+                        "mappings": [],
+                        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 70}, {"color": "red", "value": 85}]},
+                        "unit": "celsius"
+                      },
+                      "overrides": []
+                    },
+                    "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+                    "id": 3,
+                    "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+                    "pluginVersion": "10.0.0",
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "DCGM_FI_DEV_GPU_TEMP", "legendFormat": "{{Hostname}} GPU {{gpu}}", "refId": "A"}],
+                    "title": "GPU Temperature",
+                    "type": "timeseries"
+                  },
+                  {
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "fieldConfig": {
+                      "defaults": {
+                        "color": {"mode": "palette-classic"},
+                        "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+                        "mappings": [],
+                        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+                        "unit": "decmbytes"
+                      },
+                      "overrides": []
+                    },
+                    "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+                    "id": 4,
+                    "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+                    "pluginVersion": "10.0.0",
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "DCGM_FI_DEV_FB_USED", "legendFormat": "{{Hostname}} GPU {{gpu}}", "refId": "A"}],
+                    "title": "GPU Memory Used",
+                    "type": "timeseries"
+                  }
+                ],
+                "schemaVersion": 38,
+                "tags": ["vsf", "gpu", "nvidia"],
+                "templating": {"list": []},
+                "time": {"from": "now-1h", "to": "now"},
+                "timepicker": {},
+                "timezone": "browser",
+                "title": "VSF GPU Overview",
+                "uid": "vsf-gpu-overview",
+                "version": 1,
+                "weekStart": ""
+              }
+            power-overview.json: |
+              {
+                "annotations": {"list": []},
+                "editable": true,
+                "fiscalYearStartMonth": 0,
+                "graphTooltip": 0,
+                "id": null,
+                "links": [],
+                "panels": [
+                  {
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "fieldConfig": {
+                      "defaults": {
+                        "color": {"mode": "palette-classic"},
+                        "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+                        "mappings": [],
+                        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+                        "unit": "watt"
+                      },
+                      "overrides": []
+                    },
+                    "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0},
+                    "id": 1,
+                    "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+                    "pluginVersion": "10.0.0",
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "node_power_watts", "legendFormat": "{{node_name}}", "refId": "A"}],
+                    "title": "Node Power Consumption",
+                    "type": "timeseries"
+                  },
+                  {
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "fieldConfig": {
+                      "defaults": {
+                        "color": {"mode": "palette-classic"},
+                        "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+                        "mappings": [],
+                        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+                        "unit": "joule"
+                      },
+                      "overrides": []
+                    },
+                    "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+                    "id": 2,
+                    "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+                    "pluginVersion": "10.0.0",
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(kepler_node_platform_joules_total[5m])", "legendFormat": "{{node_name}}", "refId": "A"}],
+                    "title": "Platform Energy Rate (J/s)",
+                    "type": "timeseries"
+                  },
+                  {
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "fieldConfig": {
+                      "defaults": {
+                        "color": {"mode": "palette-classic"},
+                        "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}},
+                        "mappings": [],
+                        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+                        "unit": "joule"
+                      },
+                      "overrides": []
+                    },
+                    "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+                    "id": 3,
+                    "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+                    "pluginVersion": "10.0.0",
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "rate(kepler_container_joules_total[5m])", "legendFormat": "{{container_name}}", "refId": "A"}],
+                    "title": "Container Energy Rate (J/s)",
+                    "type": "timeseries"
+                  },
+                  {
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "fieldConfig": {
+                      "defaults": {
+                        "color": {"mode": "palette-classic"},
+                        "mappings": [],
+                        "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]},
+                        "unit": "percent"
+                      },
+                      "overrides": []
+                    },
+                    "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+                    "id": 4,
+                    "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+                    "pluginVersion": "10.0.0",
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "node_cpu_utilization_percent", "legendFormat": "{{node_name}}", "refId": "A"}],
+                    "title": "Node CPU Utilization",
+                    "type": "timeseries"
+                  }
+                ],
+                "schemaVersion": 38,
+                "tags": ["vsf", "power", "energy", "kepler"],
+                "templating": {"list": []},
+                "time": {"from": "now-1h", "to": "now"},
+                "timepicker": {},
+                "timezone": "browser",
+                "title": "VSF Power Overview",
+                "uid": "vsf-power-overview",
+                "version": 1,
+                "weekStart": ""
+              }
+    
+    - name: Apply dashboards ConfigMap
+      command: k3s kubectl apply -f /tmp/grafana-dashboards-cm.yaml
+      register: cm_apply
+    
+    - name: Restart Grafana to pick up dashboards
+      command: k3s kubectl rollout restart deployment/grafana -n {{ namespace }}
+      when: cm_apply.changed
+    
+    - name: Wait for Grafana to be ready
+      command: >
+        k3s kubectl rollout status deployment/grafana
+        -n {{ namespace }} --timeout=120s
+      register: rollout_status
+      retries: 3
+      delay: 10
+      until: rollout_status.rc == 0
+
+
+- name: Validate Grafana deployment
+  hosts: control_plane[0]
+  become: true
+  vars:
+    namespace: monitoring
+    
+  tasks:
+    - name: Get Grafana pod
+      command: k3s kubectl get pods -n {{ namespace }} -l app.kubernetes.io/name=grafana -o wide
+      register: grafana_pods
+      changed_when: false
+    
+    - name: Display Grafana pod
+      debug:
+        msg: "{{ grafana_pods.stdout_lines }}"
+    
+    - name: Get Grafana service
+      command: k3s kubectl get svc -n {{ namespace }} grafana
+      register: grafana_svc
+      changed_when: false
+    
+    - name: Display Grafana service
+      debug:
+        msg: "{{ grafana_svc.stdout_lines }}"
+    
+    - name: Verify dashboards ConfigMap exists
+      command: k3s kubectl get configmap grafana-dashboards-vsf -n {{ namespace }}
+      register: dashboards_cm
+      changed_when: false
+    
+    - name: Deployment summary
+      debug:
+        msg: |
+          ========================================
+          Grafana Deployment Complete
+          ========================================
+          Namespace: {{ namespace }}
+          
+          Pod:
+          {{ grafana_pods.stdout }}
+          
+          Service:
+          {{ grafana_svc.stdout }}
+          
+          Dashboards:
+          - VSF GPU Overview (uid: vsf-gpu-overview)
+          - VSF Power Overview (uid: vsf-power-overview)
+          
+          Access:
+          kubectl port-forward svc/grafana 3000:80 -n {{ namespace }}
+          
+          Then open: http://localhost:3000
+          Default credentials: admin / vsf-admin-changeme
+          ========================================

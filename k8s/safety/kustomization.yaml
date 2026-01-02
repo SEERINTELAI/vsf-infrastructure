@@ -1,0 +1,18 @@
+# VSF Safety Resources
+# 
+# Deploy with: kubectl apply -k k8s/safety/
+#
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: vsf-workloads
+
+resources:
+  - namespace.yaml
+  - resource-quota.yaml
+  - limit-range.yaml
+  - network-policy.yaml
+
+commonLabels:
+  app.kubernetes.io/managed-by: vsf-safety
+  vsf-safety: enabled

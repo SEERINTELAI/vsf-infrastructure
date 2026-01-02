@@ -1,0 +1,107 @@
+# Power Baseline Configuration
+# 
+# Run 8 workload types to establish power consumption baselines
+# for comparison with SOTA systems and AgentOne optimization
+
+baselines:
+  - name: idle
+    description: "System at idle, no workloads"
+    workload: null
+    duration_seconds: 600
+    metrics:
+      - power_watts
+      - energy_joules
+      - cpu_percent
+      - memory_percent
+    repetitions: 3
+
+  - name: cpu-stress
+    description: "CPU-bound workload (stress-ng --cpu)"
+    workload: cpu-stress
+    duration_seconds: 600
+    metrics:
+      - power_watts
+      - energy_joules
+      - cpu_percent
+      - gpu_power
+    repetitions: 3
+
+  - name: memory-alloc
+    description: "Memory-intensive workload (stress-ng --vm)"
+    workload: memory-allocation
+    duration_seconds: 600
+    metrics:
+      - power_watts
+      - energy_joules
+      - memory_percent
+    repetitions: 3
+
+  - name: gpu-training
+    description: "GPU training simulation"
+    workload: gpu-training
+    duration_seconds: 600
+    metrics:
+      - power_watts
+      - energy_joules
+      - gpu_power
+      - gpu_temp
+    repetitions: 3
+
+  - name: web-server
+    description: "Web server with diurnal pattern"
+    workload: web-server-sim
+    duration_seconds: 900
+    metrics:
+      - power_watts
+      - energy_joules
+      - cpu_percent
+    repetitions: 3
+
+  - name: bursty-api
+    description: "Bursty API workload"
+    workload: bursty
+    duration_seconds: 600
+    metrics:
+      - power_watts
+      - energy_joules
+      - cpu_percent
+    repetitions: 3
+
+  - name: mixed-ml
+    description: "Mixed ML workload (CPU + GPU)"
+    workload: mixed
+    duration_seconds: 600
+    metrics:
+      - power_watts
+      - energy_joules
+      - cpu_percent
+      - gpu_power
+    repetitions: 3
+
+  - name: full-cluster
+    description: "Maximum load across cluster"
+    workload: max-load
+    duration_seconds: 600
+    metrics:
+      - power_watts
+      - energy_joules
+      - cpu_percent
+      - memory_percent
+      - gpu_power
+    repetitions: 3
+
+# Warmup settings
+warmup:
+  enabled: true
+  duration_seconds: 60
+
+# Cooldown between baselines
+cooldown:
+  enabled: true
+  duration_seconds: 120
+
+# Output settings
+output:
+  directory: /tmp/vsf-baselines
+  format: json
+  include_raw_metrics: true

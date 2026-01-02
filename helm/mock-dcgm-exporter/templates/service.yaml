@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mock-dcgm-exporter.fullname" . }}
+  labels:
+    {{- include "mock-dcgm-exporter.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "mock-dcgm-exporter.selectorLabels" . | nindent 4 }}

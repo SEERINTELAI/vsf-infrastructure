@@ -1,0 +1,178 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mock-dcgm-exporter.fullname" . }}-script
+  labels:
+    {{- include "mock-dcgm-exporter.labels" . | nindent 4 }}
+data:
+  mock_dcgm_exporter.py: |
+    #!/usr/bin/env python3
+    """
+    Mock DCGM Exporter - Generates synthetic GPU metrics in Prometheus format.
+    
+    Matches the metrics schema of the real NVIDIA DCGM Exporter for seamless
+    upgrade path to production GPU monitoring.
+    """
+    
+    import os
+    import random
+    import socket
+    import time
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    from threading import Thread
+    import json
+    
+    # Configuration from environment
+    PORT = int(os.environ.get('METRICS_PORT', '9400'))
+    INTERVAL = int(os.environ.get('METRICS_INTERVAL', '15'))
+    GPUS_PER_NODE = int(os.environ.get('GPUS_PER_NODE', '1'))
+    GPU_MODEL = os.environ.get('GPU_MODEL', 'NVIDIA RTX 4090')
+    GPU_MEMORY_MIB = int(os.environ.get('GPU_MEMORY_MIB', '24576'))
+    NODE_NAME = os.environ.get('NODE_NAME', socket.gethostname())
+    PROFILE = os.environ.get('WORKLOAD_PROFILE', 'moderate')
+    
+    # Workload profiles
+    PROFILES = {
+        'idle': {
+            'gpu_util': (0, 5),
+            'mem_used': (500, 1000),
+            'power': (50, 80),
+            'temp': (35, 45),
+        },
+        'moderate': {
+            'gpu_util': (20, 60),
+            'mem_used': (4000, 12000),
+            'power': (150, 280),
+            'temp': (55, 70),
+        },
+        'heavy': {
+            'gpu_util': (80, 100),
+            'mem_used': (18000, 23000),
+            'power': (350, 450),
+            'temp': (70, 85),
+        },
+    }
+    
+    # State for smooth transitions
+    class GPUState:
+        def __init__(self, gpu_id):
+            self.gpu_id = gpu_id
+            self.uuid = f"GPU-{NODE_NAME}-{gpu_id}-mock-{random.randint(1000, 9999)}"
+            profile = PROFILES.get(PROFILE, PROFILES['moderate'])
+            self.util = random.uniform(*profile['gpu_util'])
+            self.mem = random.uniform(*profile['mem_used'])
+            self.power = random.uniform(*profile['power'])
+            self.temp = random.uniform(*profile['temp'])
+            self.sm_clock = 2100  # MHz
+            self.mem_clock = 10500  # MHz
+            
+        def update(self):
+            """Update metrics with smooth random walk."""
+            profile = PROFILES.get(PROFILE, PROFILES['moderate'])
+            
+            # Random walk with bounds
+            self.util = max(profile['gpu_util'][0], 
+                           min(profile['gpu_util'][1], 
+                               self.util + random.uniform(-5, 5)))
+            self.mem = max(profile['mem_used'][0],
+                          min(profile['mem_used'][1],
+                              self.mem + random.uniform(-500, 500)))
+            self.power = max(profile['power'][0],
+                            min(profile['power'][1],
+                                self.power + random.uniform(-20, 20)))
+            self.temp = max(profile['temp'][0],
+                           min(profile['temp'][1],
+                               self.temp + random.uniform(-2, 2)))
+    
+    # Initialize GPU states
+    gpu_states = [GPUState(i) for i in range(GPUS_PER_NODE)]
+    
+    def generate_metrics():
+        """Generate Prometheus-format metrics matching DCGM exporter schema."""
+        lines = []
+        
+        # HELP and TYPE declarations (matching real DCGM exporter)
+        metrics_info = [
+            ('DCGM_FI_DEV_GPU_UTIL', 'gauge', 'GPU utilization (in %).'),
+            ('DCGM_FI_DEV_MEM_COPY_UTIL', 'gauge', 'Memory utilization (in %).'),
+            ('DCGM_FI_DEV_FB_FREE', 'gauge', 'Framebuffer memory free (in MiB).'),
+            ('DCGM_FI_DEV_FB_USED', 'gauge', 'Framebuffer memory used (in MiB).'),
+            ('DCGM_FI_DEV_POWER_USAGE', 'gauge', 'Power draw (in W).'),
+            ('DCGM_FI_DEV_GPU_TEMP', 'gauge', 'GPU temperature (in C).'),
+            ('DCGM_FI_DEV_SM_CLOCK', 'gauge', 'SM clock frequency (in MHz).'),
+            ('DCGM_FI_DEV_MEM_CLOCK', 'gauge', 'Memory clock frequency (in MHz).'),
+            ('DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION', 'counter', 'Total energy consumption since boot (in mJ).'),
+        ]
+        
+        for name, mtype, help_text in metrics_info:
+            lines.append(f'# HELP {name} {help_text}')
+            lines.append(f'# TYPE {name} {mtype}')
+        
+        lines.append('')
+        
+        # Generate metrics for each GPU
+        for gpu in gpu_states:
+            gpu.update()
+            
+            labels = f'gpu="{gpu.gpu_id}",UUID="{gpu.uuid}",device="nvidia{gpu.gpu_id}",modelName="{GPU_MODEL}",Hostname="{NODE_NAME}"'
+            
+            # GPU utilization
+            lines.append(f'DCGM_FI_DEV_GPU_UTIL{{{labels}}} {gpu.util:.1f}')
+            
+            # Memory utilization (percentage)
+            mem_util = (gpu.mem / GPU_MEMORY_MIB) * 100
+            lines.append(f'DCGM_FI_DEV_MEM_COPY_UTIL{{{labels}}} {mem_util:.1f}')
+            
+            # Framebuffer memory
+            lines.append(f'DCGM_FI_DEV_FB_FREE{{{labels}}} {GPU_MEMORY_MIB - gpu.mem:.0f}')
+            lines.append(f'DCGM_FI_DEV_FB_USED{{{labels}}} {gpu.mem:.0f}')
+            
+            # Power
+            lines.append(f'DCGM_FI_DEV_POWER_USAGE{{{labels}}} {gpu.power:.1f}')
+            
+            # Temperature
+            lines.append(f'DCGM_FI_DEV_GPU_TEMP{{{labels}}} {gpu.temp:.0f}')
+            
+            # Clocks
+            lines.append(f'DCGM_FI_DEV_SM_CLOCK{{{labels}}} {gpu.sm_clock}')
+            lines.append(f'DCGM_FI_DEV_MEM_CLOCK{{{labels}}} {gpu.mem_clock}')
+            
+            # Energy (monotonically increasing counter)
+            # Approximate: power (W) * time since boot * 1000 (for mJ)
+            energy = int(gpu.power * time.monotonic() * 1000)
+            lines.append(f'DCGM_FI_DEV_TOTAL_ENERGY_CONSUMPTION{{{labels}}} {energy}')
+        
+        return '\n'.join(lines) + '\n'
+    
+    class MetricsHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/metrics':
+                content = generate_metrics()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.send_header('Content-Length', len(content))
+                self.end_headers()
+                self.wfile.write(content.encode())
+            elif self.path == '/health':
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(b'OK')
+            else:
+                self.send_response(404)
+                self.end_headers()
+        
+        def log_message(self, format, *args):
+            # Suppress request logging
+            pass
+    
+    if __name__ == '__main__':
+        print(f"Mock DCGM Exporter starting...")
+        print(f"  Node: {NODE_NAME}")
+        print(f"  GPUs: {GPUS_PER_NODE} x {GPU_MODEL}")
+        print(f"  Profile: {PROFILE}")
+        print(f"  Port: {PORT}")
+        
+        server = HTTPServer(('0.0.0.0', PORT), MetricsHandler)
+        print(f"Serving metrics on http://0.0.0.0:{PORT}/metrics")
+        server.serve_forever()

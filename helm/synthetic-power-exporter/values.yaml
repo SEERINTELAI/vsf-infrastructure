@@ -1,0 +1,82 @@
+# Synthetic Power Exporter Values
+# Provides Kepler-compatible power metrics using formula-based estimation
+
+replicaCount: 1
+
+image:
+  repository: python
+  tag: "3.11-slim"
+  pullPolicy: IfNotPresent
+
+# Metrics configuration
+metrics:
+  port: 9100
+  interval: 15
+
+# Power simulation configuration
+powerSimulation:
+  # Base power consumption (watts) when idle
+  basePowerWatts: 50
+  
+  # Power per CPU percentage point
+  cpuPowerFactor: 2.5
+  
+  # Power per GB of memory used
+  memoryPowerFactor: 0.5
+  
+  # Maximum node power (watts)
+  maxNodePowerWatts: 500
+  
+  # Simulate RAPL domains
+  raplDomains:
+    - name: "package-0"
+      maxWatts: 150
+    - name: "dram"
+      maxWatts: 30
+    - name: "core"
+      maxWatts: 120
+  
+  # Workload profiles for container power estimation
+  profiles:
+    idle:
+      containerPowerMin: 0.1
+      containerPowerMax: 1.0
+    
+    moderate:
+      containerPowerMin: 2.0
+      containerPowerMax: 15.0
+    
+    heavy:
+      containerPowerMin: 20.0
+      containerPowerMax: 50.0
+  
+  defaultProfile: "moderate"
+
+# ServiceMonitor for Prometheus Operator
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  labels:
+    release: prometheus
+
+# Run on all nodes for host-level metrics
+nodeSelector: {}
+
+# Tolerate all taints to run on all nodes
+tolerations:
+  - operator: "Exists"
+
+# Resources for the synthetic exporter
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+# Labels to add to all resources
+labels: {}
+
+# Annotations to add to all resources
+annotations: {}
