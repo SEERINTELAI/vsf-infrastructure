@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "synthetic-power-exporter.fullname" . }}
+  labels:
+    {{- include "synthetic-power-exporter.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "synthetic-power-exporter.selectorLabels" . | nindent 4 }}

@@ -1,0 +1,175 @@
+---
+# deploy-synthetic-power.yml
+# Deploy synthetic-power-exporter Helm chart to K3s cluster (Task 115)
+#
+# Usage:
+#   ansible-playbook -i inventory/vsf.yml monitoring/deploy-synthetic-power.yml
+#
+# Prerequisites:
+#   - K3s cluster running (Tasks 105-109)
+#   - Prometheus stack deployed (Task 114)
+
+- name: Deploy synthetic-power-exporter
+  hosts: control_plane[0]
+  become: true
+  vars:
+    helm_chart_path: "{{ playbook_dir }}/../../helm/synthetic-power-exporter"
+    release_name: synthetic-power-exporter
+    namespace: power-monitoring
+    
+    # Power simulation configuration
+    base_power_watts: 50
+    cpu_power_factor: 2.5
+    memory_power_factor: 0.5
+    max_node_power_watts: 500
+    workload_profile: "moderate"
+    
+  tasks:
+    - name: Ensure Helm is installed
+      command: helm version --short
+      register: helm_check
+      changed_when: false
+      failed_when: helm_check.rc != 0
+    
+    - name: Create power-monitoring namespace
+      command: k3s kubectl create namespace {{ namespace }} --dry-run=client -o yaml
+      register: ns_yaml
+      changed_when: false
+    
+    - name: Apply namespace
+      command: k3s kubectl apply -f -
+      args:
+        stdin: "{{ ns_yaml.stdout }}"
+    
+    - name: Label namespace
+      command: >
+        k3s kubectl label namespace {{ namespace }}
+        vsf/component=power-monitoring
+        --overwrite
+    
+    - name: Copy Helm chart to control plane
+      synchronize:
+        src: "{{ helm_chart_path }}/"
+        dest: /tmp/synthetic-power-exporter/
+        delete: yes
+      delegate_to: "{{ inventory_hostname }}"
+    
+    - name: Create values override file
+      copy:
+        dest: /tmp/synthetic-power-values.yaml
+        mode: '0644'
+        content: |
+          # VSF Synthetic Power Exporter Configuration
+          
+          powerSimulation:
+            basePowerWatts: {{ base_power_watts }}
+            cpuPowerFactor: {{ cpu_power_factor }}
+            memoryPowerFactor: {{ memory_power_factor }}
+            maxNodePowerWatts: {{ max_node_power_watts }}
+            defaultProfile: "{{ workload_profile }}"
+          
+          # Run on all nodes
+          tolerations:
+            - operator: "Exists"
+          
+          # Enable Prometheus ServiceMonitor
+          serviceMonitor:
+            enabled: true
+            interval: 15s
+            labels:
+              release: prometheus
+    
+    - name: Deploy synthetic-power-exporter with Helm
+      environment:
+        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      command: >
+        helm upgrade --install {{ release_name }}
+        /tmp/synthetic-power-exporter
+        --namespace {{ namespace }}
+        --values /tmp/synthetic-power-values.yaml
+        --wait
+        --timeout 5m
+      register: helm_install
+    
+    - name: Display Helm output
+      debug:
+        msg: "{{ helm_install.stdout_lines }}"
+    
+    - name: Wait for DaemonSet to be ready
+      command: >
+        k3s kubectl rollout status daemonset/{{ release_name }}
+        -n {{ namespace }} --timeout=120s
+      register: rollout_status
+      retries: 3
+      delay: 10
+      until: rollout_status.rc == 0
+
+
+- name: Validate synthetic-power-exporter deployment
+  hosts: control_plane[0]
+  become: true
+  vars:
+    namespace: power-monitoring
+    release_name: synthetic-power-exporter
+    
+  tasks:
+    - name: Get DaemonSet status
+      command: k3s kubectl get daemonset {{ release_name }} -n {{ namespace }} -o wide
+      register: daemonset_status
+      changed_when: false
+    
+    - name: Display DaemonSet status
+      debug:
+        msg: "{{ daemonset_status.stdout_lines }}"
+    
+    - name: Get pods
+      command: k3s kubectl get pods -n {{ namespace }} -l app.kubernetes.io/name=synthetic-power-exporter -o wide
+      register: pods_status
+      changed_when: false
+    
+    - name: Display pods
+      debug:
+        msg: "{{ pods_status.stdout_lines }}"
+    
+    - name: Test metrics endpoint from a pod
+      shell: |
+        POD=$(k3s kubectl get pods -n {{ namespace }} -l app.kubernetes.io/name=synthetic-power-exporter -o jsonpath='{.items[0].metadata.name}')
+        k3s kubectl exec -n {{ namespace }} $POD -- wget -qO- http://localhost:9100/metrics 2>/dev/null | head -30
+      register: metrics_test
+      changed_when: false
+      failed_when: false
+    
+    - name: Display sample metrics
+      debug:
+        msg: "{{ metrics_test.stdout_lines }}"
+    
+    - name: Verify Kepler metrics are present
+      shell: |
+        POD=$(k3s kubectl get pods -n {{ namespace }} -l app.kubernetes.io/name=synthetic-power-exporter -o jsonpath='{.items[0].metadata.name}')
+        k3s kubectl exec -n {{ namespace }} $POD -- wget -qO- http://localhost:9100/metrics 2>/dev/null | grep -c "kepler_"
+      register: kepler_metric_count
+      changed_when: false
+      failed_when: kepler_metric_count.stdout | int < 3
+    
+    - name: Deployment summary
+      debug:
+        msg: |
+          ========================================
+          Synthetic Power Exporter Deployment Complete
+          ========================================
+          Namespace: {{ namespace }}
+          Release: {{ release_name }}
+          
+          DaemonSet:
+          {{ daemonset_status.stdout }}
+          
+          Metrics endpoint: :9100/metrics
+          Kepler-compatible metrics found: {{ kepler_metric_count.stdout }}
+          
+          Power formula:
+            node_power = {{ base_power_watts }}W + (CPU% * {{ cpu_power_factor }}) + (RAM_GB * {{ memory_power_factor }})
+          
+          Next Steps:
+          1. Verify metrics in Prometheus
+          2. Import power Grafana dashboard
+          ========================================

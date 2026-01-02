@@ -1,0 +1,24 @@
+apiVersion: v2
+name: synthetic-power-exporter
+description: Synthetic Power Exporter for VSF - provides Kepler-compatible power metrics
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - power
+  - energy
+  - kepler
+  - mock
+  - prometheus
+  - metrics
+  - rapl
+maintainers:
+  - name: VSF Team
+    email: vsf@seerintel.ai
+home: https://github.com/SEERINTELAI/vsf-infrastructure
+sources:
+  - https://github.com/SEERINTELAI/vsf-infrastructure/tree/main/helm/synthetic-power-exporter
+annotations:
+  category: Monitoring
+  vsf/mock-mode: "true"
+  vsf/upgradeable-to: "kepler"

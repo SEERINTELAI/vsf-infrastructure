@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "synthetic-power-exporter.fullname" . }}
+  labels:
+    {{- include "synthetic-power-exporter.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "synthetic-power-exporter.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "synthetic-power-exporter.labels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.metrics.port }}"
+        prometheus.io/path: "/metrics"
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: synthetic-power-exporter
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - python3
+            - /app/synthetic_power_exporter.py
+          env:
+            - name: METRICS_PORT
+              value: "{{ .Values.metrics.port }}"
+            - name: BASE_POWER_WATTS
+              value: "{{ .Values.powerSimulation.basePowerWatts }}"
+            - name: CPU_POWER_FACTOR
+              value: "{{ .Values.powerSimulation.cpuPowerFactor }}"
+            - name: MEMORY_POWER_FACTOR
+              value: "{{ .Values.powerSimulation.memoryPowerFactor }}"
+            - name: MAX_NODE_POWER_WATTS
+              value: "{{ .Values.powerSimulation.maxNodePowerWatts }}"
+            - name: WORKLOAD_PROFILE
+              value: "{{ .Values.powerSimulation.defaultProfile }}"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: metrics
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: script
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: {{ include "synthetic-power-exporter.fullname" . }}-script
+            defaultMode: 0755

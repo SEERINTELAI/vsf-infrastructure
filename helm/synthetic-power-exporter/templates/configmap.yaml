@@ -1,0 +1,191 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "synthetic-power-exporter.fullname" . }}-script
+  labels:
+    {{- include "synthetic-power-exporter.labels" . | nindent 4 }}
+data:
+  synthetic_power_exporter.py: |
+    #!/usr/bin/env python3
+    """
+    Synthetic Power Exporter - Generates Kepler-compatible power metrics.
+    
+    Uses formula-based estimation based on CPU/memory utilization to simulate
+    per-node and per-container power consumption. Matches Kepler metrics schema
+    for seamless upgrade path to production power monitoring.
+    """
+    
+    import os
+    import random
+    import socket
+    import time
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import json
+    
+    # Configuration from environment
+    PORT = int(os.environ.get('METRICS_PORT', '9100'))
+    NODE_NAME = os.environ.get('NODE_NAME', socket.gethostname())
+    PROFILE = os.environ.get('WORKLOAD_PROFILE', 'moderate')
+    
+    # Power simulation parameters
+    BASE_POWER = float(os.environ.get('BASE_POWER_WATTS', '50'))
+    CPU_POWER_FACTOR = float(os.environ.get('CPU_POWER_FACTOR', '2.5'))
+    MEMORY_POWER_FACTOR = float(os.environ.get('MEMORY_POWER_FACTOR', '0.5'))
+    MAX_NODE_POWER = float(os.environ.get('MAX_NODE_POWER_WATTS', '500'))
+    
+    # Workload profiles
+    PROFILES = {
+        'idle': {'container_power': (0.1, 1.0)},
+        'moderate': {'container_power': (2.0, 15.0)},
+        'heavy': {'container_power': (20.0, 50.0)},
+    }
+    
+    # Simulated containers (in real deployment, would query K8s API)
+    SIMULATED_CONTAINERS = [
+        {'name': 'app-frontend', 'namespace': 'default', 'pod': 'frontend-abc123'},
+        {'name': 'app-backend', 'namespace': 'default', 'pod': 'backend-def456'},
+        {'name': 'database', 'namespace': 'default', 'pod': 'postgres-ghi789'},
+        {'name': 'cache', 'namespace': 'default', 'pod': 'redis-jkl012'},
+    ]
+    
+    # State for smooth transitions
+    class PowerState:
+        def __init__(self):
+            self.cpu_util = random.uniform(10, 50)
+            self.memory_used_gb = random.uniform(4, 32)
+            self.start_time = time.time()
+            self.total_energy_joules = 0
+            self.last_update = time.time()
+            
+            # Per-container power
+            self.container_power = {}
+            for c in SIMULATED_CONTAINERS:
+                key = f"{c['namespace']}/{c['pod']}/{c['name']}"
+                self.container_power[key] = random.uniform(1, 10)
+        
+        def update(self):
+            now = time.time()
+            elapsed = now - self.last_update
+            self.last_update = now
+            
+            profile = PROFILES.get(PROFILE, PROFILES['moderate'])
+            
+            # Random walk for CPU utilization
+            self.cpu_util = max(0, min(100, self.cpu_util + random.uniform(-5, 5)))
+            
+            # Random walk for memory
+            self.memory_used_gb = max(1, min(64, self.memory_used_gb + random.uniform(-1, 1)))
+            
+            # Calculate node power
+            node_power = BASE_POWER + (self.cpu_util * CPU_POWER_FACTOR) + (self.memory_used_gb * MEMORY_POWER_FACTOR)
+            node_power = min(node_power, MAX_NODE_POWER)
+            
+            # Update total energy (joules = watts * seconds)
+            self.total_energy_joules += node_power * elapsed
+            
+            # Update container power
+            for key in self.container_power:
+                min_p, max_p = profile['container_power']
+                self.container_power[key] = max(min_p, min(max_p, 
+                    self.container_power[key] + random.uniform(-1, 1)))
+            
+            return node_power
+    
+    state = PowerState()
+    
+    def generate_metrics():
+        """Generate Prometheus-format metrics matching Kepler schema."""
+        lines = []
+        
+        node_power = state.update()
+        
+        # Metric definitions (matching Kepler schema)
+        metrics_info = [
+            ('kepler_node_core_joules_total', 'counter', 'Total energy consumed by CPU cores (joules)'),
+            ('kepler_node_dram_joules_total', 'counter', 'Total energy consumed by DRAM (joules)'),
+            ('kepler_node_package_joules_total', 'counter', 'Total energy consumed by CPU package (joules)'),
+            ('kepler_node_platform_joules_total', 'counter', 'Total energy consumed by platform (joules)'),
+            ('kepler_container_joules_total', 'counter', 'Total energy consumed by container (joules)'),
+            ('kepler_container_core_joules_total', 'counter', 'Total CPU energy consumed by container (joules)'),
+            ('kepler_container_dram_joules_total', 'counter', 'Total DRAM energy consumed by container (joules)'),
+            ('node_power_watts', 'gauge', 'Current node power consumption (watts)'),
+            ('node_cpu_utilization_percent', 'gauge', 'Current CPU utilization (percent)'),
+        ]
+        
+        for name, mtype, help_text in metrics_info:
+            lines.append(f'# HELP {name} {help_text}')
+            lines.append(f'# TYPE {name} {mtype}')
+        
+        lines.append('')
+        
+        # Node-level power metrics
+        node_labels = f'node_name="{NODE_NAME}",instance="{NODE_NAME}"'
+        
+        # Distribute energy across RAPL domains (approximate)
+        core_energy = state.total_energy_joules * 0.6
+        dram_energy = state.total_energy_joules * 0.1
+        package_energy = state.total_energy_joules * 0.25
+        platform_energy = state.total_energy_joules
+        
+        lines.append(f'kepler_node_core_joules_total{{{node_labels}}} {core_energy:.2f}')
+        lines.append(f'kepler_node_dram_joules_total{{{node_labels}}} {dram_energy:.2f}')
+        lines.append(f'kepler_node_package_joules_total{{{node_labels}}} {package_energy:.2f}')
+        lines.append(f'kepler_node_platform_joules_total{{{node_labels}}} {platform_energy:.2f}')
+        
+        # Additional useful metrics
+        lines.append(f'node_power_watts{{{node_labels}}} {node_power:.2f}')
+        lines.append(f'node_cpu_utilization_percent{{{node_labels}}} {state.cpu_util:.2f}')
+        
+        lines.append('')
+        
+        # Per-container power metrics
+        uptime = time.time() - state.start_time
+        for container in SIMULATED_CONTAINERS:
+            key = f"{container['namespace']}/{container['pod']}/{container['name']}"
+            power = state.container_power.get(key, 1.0)
+            energy = power * uptime  # Simplified: power * time
+            
+            container_labels = (
+                f'container_name="{container["name"]}",'
+                f'container_namespace="{container["namespace"]}",'
+                f'pod_name="{container["pod"]}",'
+                f'node="{NODE_NAME}"'
+            )
+            
+            lines.append(f'kepler_container_joules_total{{{container_labels}}} {energy:.2f}')
+            lines.append(f'kepler_container_core_joules_total{{{container_labels}}} {energy * 0.7:.2f}')
+            lines.append(f'kepler_container_dram_joules_total{{{container_labels}}} {energy * 0.1:.2f}')
+        
+        return '\n'.join(lines) + '\n'
+    
+    class MetricsHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/metrics':
+                content = generate_metrics()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.send_header('Content-Length', len(content))
+                self.end_headers()
+                self.wfile.write(content.encode())
+            elif self.path == '/health':
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(b'OK')
+            else:
+                self.send_response(404)
+                self.end_headers()
+        
+        def log_message(self, format, *args):
+            pass
+    
+    if __name__ == '__main__':
+        print(f"Synthetic Power Exporter starting...")
+        print(f"  Node: {NODE_NAME}")
+        print(f"  Profile: {PROFILE}")
+        print(f"  Base Power: {BASE_POWER}W")
+        print(f"  Port: {PORT}")
+        
+        server = HTTPServer(('0.0.0.0', PORT), MetricsHandler)
+        print(f"Serving metrics on http://0.0.0.0:{PORT}/metrics")
+        server.serve_forever()
