@@ -1,0 +1,95 @@
+---
+# Validate System Probe deployment on all VSF VMs
+# Usage: ansible-playbook -i ../inventory/vsf.yml validate-probes.yml
+
+- name: Validate System Probe Deployment
+  hosts: all:!localhost
+  gather_facts: false
+  vars:
+    probe_port: 8765
+    probe_install_dir: /opt/system-probe
+  tasks:
+    - name: Check probe service status
+      systemd:
+        name: system-probe
+      register: probe_service
+      failed_when: false
+
+    - name: Check probe port is listening
+      wait_for:
+        port: "{{ probe_port }}"
+        host: "127.0.0.1"
+        timeout: 5
+      register: port_check
+      failed_when: false
+
+    - name: Test MCP endpoint
+      uri:
+        url: "http://127.0.0.1:{{ probe_port }}/mcp"
+        method: GET
+        status_code: [200, 405]  # 405 is expected for GET on MCP
+        timeout: 5
+      register: mcp_check
+      failed_when: false
+
+    - name: Get probe version
+      command: cat {{ probe_install_dir }}/VERSION
+      register: probe_version
+      failed_when: false
+      changed_when: false
+
+    - name: Set validation results
+      set_fact:
+        probe_status:
+          hostname: "{{ inventory_hostname }}"
+          service_running: "{{ probe_service.status.ActiveState | default('unknown') == 'active' }}"
+          port_listening: "{{ port_check.elapsed is defined }}"
+          mcp_responding: "{{ mcp_check.status is defined }}"
+          version: "{{ probe_version.stdout | default('unknown') }}"
+
+    - name: Display validation result
+      debug:
+        msg: |
+          === {{ inventory_hostname }} ===
+          Service Running: {{ probe_status.service_running }}
+          Port Listening: {{ probe_status.port_listening }}
+          MCP Responding: {{ probe_status.mcp_responding }}
+          Version: {{ probe_status.version }}
+
+    - name: Set host as failed if any check failed
+      set_fact:
+        probe_healthy: "{{ probe_status.service_running and probe_status.port_listening }}"
+
+- name: Summarize Probe Health
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Collect all probe statuses
+      set_fact:
+        all_probes: "{{ groups['all'] | difference(['localhost']) | map('extract', hostvars, 'probe_status') | list }}"
+
+    - name: Count healthy probes
+      set_fact:
+        healthy_count: "{{ all_probes | selectattr('service_running', 'equalto', true) | list | length }}"
+        total_count: "{{ all_probes | length }}"
+
+    - name: Display summary
+      debug:
+        msg: |
+          
+          ========================================
+          SYSTEM PROBE VALIDATION SUMMARY
+          ========================================
+          Total VMs: {{ total_count }}
+          Healthy Probes: {{ healthy_count }}
+          Failed Probes: {{ total_count | int - healthy_count | int }}
+          ========================================
+          
+          {% for probe in all_probes %}
+          {{ '✅' if probe.service_running else '❌' }} {{ probe.hostname }} (v{{ probe.version }})
+          {% endfor %}
+
+    - name: Fail if any probes unhealthy
+      fail:
+        msg: "{{ total_count | int - healthy_count | int }} probe(s) failed validation"
+      when: healthy_count | int < total_count | int
