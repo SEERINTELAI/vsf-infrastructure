@@ -21,6 +21,14 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "monitoring: Monitoring stack tests")
     config.addinivalue_line("markers", "integration: Integration tests (may modify state)")
     
+    # Kubernetes pre-mortem categories (DP:ETG)
+    config.addinivalue_line("markers", "bootstrap: Cluster initialization/bootstrap failure tests")
+    config.addinivalue_line("markers", "ha: High availability / quorum failure tests")
+    config.addinivalue_line("markers", "network: CNI / DNS / connectivity failure tests")
+    config.addinivalue_line("markers", "scheduling: Pod scheduling failure tests")
+    config.addinivalue_line("markers", "gpu: GPU isolation / device plugin failure tests")
+    config.addinivalue_line("markers", "resource: Resource exhaustion / eviction tests")
+    
     # Monitoring pre-mortem categories (DP:ETG)
     config.addinivalue_line("markers", "service_availability: Service availability tests")
     config.addinivalue_line("markers", "metrics_collection: Metrics collection tests")
