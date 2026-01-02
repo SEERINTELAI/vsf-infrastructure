@@ -1,0 +1,28 @@
+# CPU Stress Workload Profile
+# Tests CPU-bound optimization scenarios
+
+name: cpu-stress-workload
+type: deployment
+namespace: vsf-workloads
+replicas: 8
+resources:
+  requests:
+    cpu: "500m"
+    memory: "128Mi"
+  limits:
+    cpu: "1500m"
+    memory: "256Mi"
+intensity: 0.6
+pattern: bursty
+duration_seconds: 600
+image: alpine:3.18
+command:
+  - sh
+  - -c
+  - |
+    apk add --no-cache stress-ng
+    stress-ng --cpu 2 --timeout 0
+labels:
+  workload-type: cpu-stress
+  experiment: energy-optimization
+  vsf-workload: "true"

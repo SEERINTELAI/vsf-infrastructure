@@ -1,0 +1,28 @@
+# Memory Allocation Workload Profile
+# Tests memory-intensive optimization scenarios
+
+name: memory-allocation-workload
+type: deployment
+namespace: vsf-workloads
+replicas: 6
+resources:
+  requests:
+    cpu: "200m"
+    memory: "512Mi"
+  limits:
+    cpu: "500m"
+    memory: "2Gi"
+intensity: 0.5
+pattern: steady-state
+duration_seconds: 600
+image: alpine:3.18
+command:
+  - sh
+  - -c
+  - |
+    apk add --no-cache stress-ng
+    stress-ng --vm 1 --vm-bytes 75% --timeout 0
+labels:
+  workload-type: memory-allocation
+  experiment: energy-optimization
+  vsf-workload: "true"
