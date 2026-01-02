@@ -1,0 +1,45 @@
+---
+# VSF Workload Safety ResourceQuota
+# 
+# PRIORITY 0: These limits protect Bizon1 hardware from overload.
+# 
+# Limits:
+#   CPU: 80% of 200 threads = 160 cores
+#   Memory: 85% of 1TB = 850Gi
+#   GPUs: 6 of 8 (reserve 2 for system)
+#   Pods: 100 max
+#
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: vsf-workload-safety-quota
+  namespace: vsf-workloads
+  labels:
+    app.kubernetes.io/name: vsf-safety
+    app.kubernetes.io/part-of: vsf
+    priority: "0"
+spec:
+  hard:
+    # CPU limits (80% of 200 = 160)
+    requests.cpu: "160"
+    limits.cpu: "180"
+    
+    # Memory limits (85% of 1TB = 850Gi)
+    requests.memory: "850Gi"
+    limits.memory: "900Gi"
+    
+    # GPU limits (6 of 8, reserve 2 for system)
+    requests.nvidia.com/gpu: "6"
+    limits.nvidia.com/gpu: "6"
+    
+    # Pod count limit
+    pods: "100"
+    
+    # Service limits
+    services: "20"
+    services.loadbalancers: "0"
+    services.nodeports: "5"
+    
+    # PVC limits
+    persistentvolumeclaims: "20"
+    requests.storage: "500Gi"
