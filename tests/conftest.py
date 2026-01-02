@@ -49,6 +49,9 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "metrics: Cluster metrics tests")
     config.addinivalue_line("markers", "permission: RBAC/permission tests")
     config.addinivalue_line("markers", "state: State consistency tests")
+    
+    # Hardware Safety tests (PRIORITY 0)
+    config.addinivalue_line("markers", "safety: Hardware safety tests (PRIORITY 0)")
 
 @pytest.fixture
 def project_root() -> Path:
