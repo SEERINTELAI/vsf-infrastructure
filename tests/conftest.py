@@ -52,6 +52,9 @@ def pytest_configure(config):
     
     # Hardware Safety tests (PRIORITY 0)
     config.addinivalue_line("markers", "safety: Hardware safety tests (PRIORITY 0)")
+    
+    # Workload Generation tests (F10.5 Track A)
+    config.addinivalue_line("markers", "workload_gen: Workload generation tests")
 
 @pytest.fixture
 def project_root() -> Path:
