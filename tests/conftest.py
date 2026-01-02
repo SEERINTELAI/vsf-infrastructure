@@ -58,6 +58,9 @@ def pytest_configure(config):
     
     # Experiment Framework tests (F10.5 Track B)
     config.addinivalue_line("markers", "experiment: Experiment framework tests")
+    
+    # Analysis & Reporting tests (F10.5 Track C)
+    config.addinivalue_line("markers", "analysis: Analysis and reporting tests")
 
 @pytest.fixture
 def project_root() -> Path:
